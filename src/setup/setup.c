@@ -291,8 +291,10 @@ static void clear_rows(int y0, int y1)
 
 static void keybar(const char *keys)
 {
+    static const char ver[] = "v" UM_VERSION_STR;
     fill(0, SCR_H - 1, A_KEYBAR, ' ', SCR_W);
-    put(STEP_X, SCR_H - 1, A_KEYBAR, keys);
+    put(1, SCR_H - 1, A_KEYBAR, keys);                         /* keys on the left ... */
+    put(SCR_W - 1 - lstrlenA(ver), SCR_H - 1, A_KEYBAR, ver);  /* ... version on the right */
 }
 
 /* "[ OK ]" etc. */
