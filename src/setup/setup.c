@@ -1239,7 +1239,7 @@ static int vercmp(const WCHAR *a, const WCHAR *b)
     return 0;
 }
 
-#define MSG_ROW 18                           /* two message rows, then blank rows to the key bar */
+#define MSG_ROW 19                           /* two message rows, then blank rows to the key bar */
 
 /* the splash screen; returns 'i' (install), 'u' (uninstall) or 'q' */
 static int splash(const sysinfo *si, BOOL *purge, BOOL remove)
@@ -1256,18 +1256,15 @@ static int splash(const sysinfo *si, BOOL *purge, BOOL remove)
     tui_icon(7, 2);                          /* icon 16 + 3 + logo 46, visually centred */
     tui_logo(7 + 16 + 3, 4);
     {
-        /* credit line under the letters, right-aligned to them (they end at column 71) */
-        static const char by[] = "by muncherelli", sep[] = "  \xFA  ", url[] = "github.com/muncherelli/urlmagic4";
-        int x = 7 + 16 + 3 + LOGO_W - (lstrlenA(by) + lstrlenA(sep) + lstrlenA(url));
-        put(x, 9, A_BRIGHT, by);
-        put(x + lstrlenA(by), 9, ON_BLUE(C_DCYAN), sep);
-        put(x + lstrlenA(by) + lstrlenA(sep), 9, ON_BLUE(C_CYAN), url);
+        /* repo link a line below the letters, right-aligned to them (they end at column 71) */
+        static const char url[] = "github.com/muncherelli/urlmagic4";
+        put(7 + 16 + 3 + LOGO_W - lstrlenA(url), 10, ON_BLUE(C_CYAN), url);
     }
-    put_center(11, ON_BLUE(C_YELLOW), "The missing IIS tab");
-    put_center(12, A_TEXT, "URL rewriting for IIS 4.0 on Windows NT 4.0");
+    put_center(12, ON_BLUE(C_YELLOW), "The missing IIS tab");
+    put_center(13, A_TEXT, "URL rewriting for IIS 4.0 on Windows NT 4.0");
 
-    put(STEP_X, 14, A_BRIGHT, "System check");
-    fill(STEP_X + 13, 14, ON_BLUE(C_DCYAN), (char)0xC4, 76 - (STEP_X + 13));
+    put(STEP_X, 15, A_BRIGHT, "System check");
+    fill(STEP_X + 13, 15, ON_BLUE(C_DCYAN), (char)0xC4, 76 - (STEP_X + 13));
 
     /* Windows + service pack, one cell */
     if (!si->nt) { lw = FAIL_; lstrcpyA(v, "Windows 95/98/Me"); problem = "urlmagic needs Windows NT 4.0."; }
@@ -1285,7 +1282,7 @@ static int splash(const sysinfo *si, BOOL *purge, BOOL remove)
         }
         if (ls > lw) lw = ls;
     }
-    check_cell(STEP_X, 15, 40, "Windows", v, lw);
+    check_cell(STEP_X, 16, 40, "Windows", v, lw);
     /* IIS */
     if (!si->iis_major) { li = FAIL_; lstrcpyA(v, "missing"); if (!problem) problem = "Install IIS 4.0 from the NT 4.0 Option Pack first."; }
     else {
@@ -1293,9 +1290,9 @@ static int splash(const sysinfo *si, BOOL *purge, BOOL remove)
         li = si->iis_major == 4 ? OK_ : WARN_;
         if (li == WARN_ && !advice) advice = "Not IIS 4.0: urlmagic is untested here.";
     }
-    check_cell(48, 15, TAG_X, "IIS", v, li);
+    check_cell(48, 16, TAG_X, "IIS", v, li);
     /* administrator */
-    check_cell(STEP_X, 16, 40, "Admin", si->admin ? "yes" : "no", si->admin ? OK_ : FAIL_);
+    check_cell(STEP_X, 17, 40, "Admin", si->admin ? "yes" : "no", si->admin ? OK_ : FAIL_);
     if (!si->admin && !problem) problem = "Log on as an Administrator to install urlmagic.";
     /* urlmagic */
     if (si->installed) {
@@ -1304,7 +1301,7 @@ static int splash(const sysinfo *si, BOOL *purge, BOOL remove)
     } else {
         lstrcpyA(v, "not installed");
     }
-    check_cell(48, 16, TAG_X, "urlmagic", v, -1);
+    check_cell(48, 17, TAG_X, "urlmagic", v, -1);
 
     if (remove && !si->installed && !problem) problem = "urlmagic isn't installed.";
     if (problem) {
