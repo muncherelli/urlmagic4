@@ -202,12 +202,11 @@ static void fill_page(HWND dlg, page_state *ps)
     WCHAR line[200];
 
     ps->loading = TRUE;
-    if (ps->load_error == ERROR_SUCCESS)
-        wsprintfW(line, L"Web site %lu on %s", (unsigned long)ps->instance,
-                  ps->machine[0] ? ps->machine : L"this computer");
-    else
+    if (ps->load_error != ERROR_SUCCESS) {
         wsprintfW(line, L"Couldn't read the settings (error %ld); showing defaults.", ps->load_error);
-    SetDlgItemTextW(dlg, IDC_SITE, line);
+        SetDlgItemTextW(dlg, IDC_SITE, line);
+        ShowWindow(GetDlgItem(dlg, IDC_SITE), SW_SHOW);
+    }
     CheckDlgButton(dlg, IDC_ENABLED, ps->site.enabled ? BST_CHECKED : BST_UNCHECKED);
     CheckRadioButton(dlg, IDC_FMT_AUTO, IDC_FMT_HTTPDINI, IDC_FMT_AUTO + (int)ps->site.format);
     CheckRadioButton(dlg, IDC_SRC_DOCROOT, IDC_SRC_FILE, IDC_SRC_DOCROOT + (int)ps->site.source);
