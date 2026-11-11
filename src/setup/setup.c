@@ -1,10 +1,12 @@
 /*
- * setup.exe - console installer for urlmagic4 on IIS 4.0.
+ * urlmagic4-v<version>.exe - console installer for urlmagic4 on IIS 4.0.
  *
- *   setup                  install to %SystemDrive%\urlmagic4
- *   setup install [dir]    install to dir
- *   setup uninstall        remove (keeps each site's settings)
- *   setup uninstall /purge remove, including each site's settings
+ *   urlmagic4-v4.0.0                    install to %SystemDrive%\urlmagic4
+ *   urlmagic4-v4.0.0 install [dir]      install to dir
+ *   urlmagic4-v4.0.0 uninstall          remove (keeps each site's settings)
+ *   urlmagic4-v4.0.0 uninstall /purge   remove, including each site's settings
+ *
+ * It copies itself into the install folder too, so it can uninstall later.
  *
  * Installing: stops the WWW service, copies urlmagic4.dll and urlmagic4tab.dll, registers
  * the URL Magic 4 tab, adds urlmagic4 to IIS's global ISAPI filters, starts the WWW service.
@@ -30,6 +32,7 @@ static const WCHAR *FILES[] = { L"urlmagic4.dll", L"urlmagic4tab.dll", L"README.
                                 L"CHANGELOG.md", NULL };
 
 static HANDLE g_out;
+static WCHAR g_self[MAX_PATH];         /* this program's file name, e.g. urlmagic4-v4.0.0.exe */
 static int g_errors;
 
 /* ---------------------------------------------------------------- console output */
@@ -314,6 +317,7 @@ static void record_dir(const WCHAR *dir)
     if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\urlmagic4", 0, NULL, 0, KEY_WRITE, NULL, &k, &disp) == ERROR_SUCCESS) {
         RegSetValueExW(k, L"InstallDir", 0, REG_SZ, (const BYTE *)dir, (lstrlenW(dir) + 1) * sizeof(WCHAR));
         RegSetValueExW(k, L"Version", 0, REG_SZ, (const BYTE *)UM_VERSION_WSTR, sizeof(UM_VERSION_WSTR));
+        RegSetValueExW(k, L"Setup", 0, REG_SZ, (const BYTE *)g_self, (lstrlenW(g_self) + 1) * sizeof(WCHAR));
         RegCloseKey(k);
     }
 }
@@ -327,7 +331,7 @@ static int install(const WCHAR *dir)
     dir_of_exe(src);
     join(from, src, L"urlmagic4.dll");
     if (GetFileAttributesW(from) == 0xFFFFFFFF) {
-        out("urlmagic4.dll isn't next to setup.exe. Unzip the whole release and run setup.exe from there.\r\n");
+        out("urlmagic4.dll isn't next to this program. Unzip the whole release and run it from there.\r\n");
         return 1;
     }
     out("Installing urlmagic4 " UM_VERSION_STR " to ");
@@ -354,6 +358,10 @@ static int install(const WCHAR *dir)
             return 1;
         }
     }
+    /* a copy of this program, for uninstalling later */
+    join(from, src, g_self);
+    join(to, dir, g_self);
+    if (lstrcmpiW(from, to) != 0) CopyFileW(from, to, FALSE);
     ok();
     record_dir(dir);
 
@@ -432,6 +440,26 @@ static int uninstall(BOOL purge)
             reboot = TRUE;
         }
     }
+    {
+        /* the installer copy (maybe this very program, which can't delete itself while running) */
+        WCHAR setup[MAX_PATH], here[MAX_PATH];
+        HKEY k;
+        DWORD type, size = sizeof setup;
+        setup[0] = 0;
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\urlmagic4", 0, KEY_READ, &k) == ERROR_SUCCESS) {
+            if (RegQueryValueExW(k, L"Setup", NULL, &type, (BYTE *)setup, &size) != ERROR_SUCCESS || type != REG_SZ)
+                setup[0] = 0;
+            RegCloseKey(k);
+        }
+        if (setup[0]) {
+            join(f, dir, setup);
+            GetModuleFileNameW(NULL, here, MAX_PATH);
+            if (lstrcmpiW(f, here) == 0 || (!DeleteFileW(f) && GetLastError() != ERROR_FILE_NOT_FOUND)) {
+                MoveFileExW(f, NULL, MOVEFILE_DELAY_UNTIL_REBOOT);
+                reboot = TRUE;
+            }
+        }
+    }
     join(f, dir, L"urlmagic4.log");
     DeleteFileW(f);
     join(f, dir, L"urlmagic4.log.old");
@@ -448,6 +476,7 @@ static int uninstall(BOOL purge)
         if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\urlmagic4", 0, KEY_SET_VALUE, &k) == ERROR_SUCCESS) {
             RegDeleteValueW(k, L"InstallDir");
             RegDeleteValueW(k, L"Version");
+            RegDeleteValueW(k, L"Setup");
             RegCloseKey(k);
         }
     }
@@ -457,17 +486,17 @@ static int uninstall(BOOL purge)
         if (www(TRUE, NULL)) ok();
     }
     out(g_errors ? "\r\nFinished with errors (see above).\r\n" : "\r\nurlmagic4 is removed.\r\n");
-    if (!purge) out("Site settings were kept; `setup uninstall /purge` removes them too.\r\n");
+    if (!purge) { out("Site settings were kept; `"); outw(g_self); out(" uninstall /purge` removes them too.\r\n"); }
     return g_errors ? 1 : 0;
 }
 
 static void usage(void)
 {
-    out("urlmagic4 " UM_VERSION_STR " setup\r\n\r\n"
-        "  setup                    install to %SystemDrive%\\urlmagic4\r\n"
-        "  setup install [folder]   install to folder\r\n"
-        "  setup uninstall          remove urlmagic4 (keeps site settings)\r\n"
-        "  setup uninstall /purge   remove urlmagic4 and every site's settings\r\n");
+    out("urlmagic4 " UM_VERSION_STR " setup\r\n\r\n  ");
+    outw(g_self); out("                    install to %SystemDrive%\\urlmagic4\r\n  ");
+    outw(g_self); out(" install [folder]   install to folder\r\n  ");
+    outw(g_self); out(" uninstall          remove urlmagic4 (keeps site settings)\r\n  ");
+    outw(g_self); out(" uninstall /purge   remove urlmagic4 and every site's settings\r\n");
 }
 
 /* ---------------------------------------------------------------- entry point (no CRT) */
@@ -479,6 +508,12 @@ void WINAPI start(void)
     WCHAR dir[MAX_PATH];
 
     g_out = GetStdHandle(STD_OUTPUT_HANDLE);
+    {
+        WCHAR path[MAX_PATH];
+        int i = (int)GetModuleFileNameW(NULL, path, MAX_PATH);
+        while (i > 0 && path[i - 1] != L'\\') i--;
+        lstrcpynW(g_self, path + i, MAX_PATH);
+    }
     CoInitialize(NULL);
 
     if (!argv) rc = 1;

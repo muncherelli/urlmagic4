@@ -30,6 +30,6 @@ jobs:
         if: steps.rp.outputs.release_created
         run: |
           make dist
-          gh release upload "${{ steps.rp.outputs.tag_name }}" build/urlmagic4-*.zip --clobber
+          gh release upload "${{ steps.rp.outputs.tag_name }}" build/urlmagic4-v*.zip --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

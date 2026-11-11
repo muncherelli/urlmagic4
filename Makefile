@@ -1,10 +1,12 @@
 # urlmagic4 - built with the MinGW-w64 i686 cross-compiler, for Windows NT 4.0 on 486+ CPUs.
-#   make            build/urlmagic4.dll (the filter) and build/urlmagic4tab.dll (the tab)
+#   make            build/urlmagic4.dll (the filter), build/urlmagic4tab.dll (the tab) and
+#                   build/urlmagic4-v<version>.exe (the installer)
 #   make test       run the rewrite engine's tests natively
-#   make dist       build/urlmagic4-<version>.zip (DLLs + README + LICENSE + CHANGELOG)
+#   make dist       build/urlmagic4-v<version>.zip (everything above + README, LICENSE, CHANGELOG)
 #   make install    copy the DLLs to $(DEST) (default ~/Development/files)
 comma := ,
 VERSION := $(strip $(shell cat version.txt))
+SETUP_EXE   = urlmagic4-v$(VERSION).exe
 VERSION_NUM := $(subst .,$(comma),$(firstword $(subst -, ,$(VERSION))))$(comma)0
 CC      = i686-w64-mingw32-gcc
 WINDRES = i686-w64-mingw32-windres
@@ -36,7 +38,7 @@ FILTER_LIBS = -lkernel32 -luser32 -ladvapi32 -lole32 -lgcc
 SETUP_OBJS  = $(B)/setup.o $(B)/setup.res.o $(B)/nocrt.o
 SETUP_LIBS  = -lkernel32 -luser32 -ladvapi32 -lole32 -lshell32
 
-all: $(B)/urlmagic4.dll $(B)/urlmagic4tab.dll $(B)/setup.exe
+all: $(B)/urlmagic4.dll $(B)/urlmagic4tab.dll $(B)/$(SETUP_EXE)
 
 $(B):
 	mkdir -p $@
@@ -65,7 +67,8 @@ $(B)/pcre2/%.o: third_party/pcre2/src/%.c | $(B)
 	@mkdir -p $(B)/pcre2
 	$(CC) $(CFLAGS) -w -Ithird_party/pcre2/src $(PCRE2_DEFS) -c -o $@ $<
 
-$(B)/setup.exe: $(SETUP_OBJS)
+$(B)/$(SETUP_EXE): $(SETUP_OBJS)
+	rm -f $(B)/urlmagic4-v*.exe
 	$(CC) -nostdlib -s -Wl,-e,_start@0 -Wl,--subsystem,console:4.0 \
 	  -Wl,--major-os-version,4,--minor-os-version,0 \
 	  -Wl,--disable-dynamicbase,--disable-nxcompat -o $@ $(SETUP_OBJS) $(SETUP_LIBS)
@@ -86,10 +89,10 @@ $(B)/nocrt.o: src/common/nocrt.c | $(B)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 dist: all
-	rm -rf $(B)/dist $(B)/urlmagic4-$(VERSION).zip
+	rm -rf $(B)/dist $(B)/urlmagic4-v*.zip
 	mkdir -p $(B)/dist
-	cp $(B)/*.dll $(B)/setup.exe README.md LICENSE CHANGELOG.md $(B)/dist/
-	cd $(B)/dist && python3 -m zipfile -c ../urlmagic4-$(VERSION).zip *
+	cp $(B)/*.dll $(B)/$(SETUP_EXE) README.md LICENSE CHANGELOG.md $(B)/dist/
+	cd $(B)/dist && python3 -m zipfile -c ../urlmagic4-v$(VERSION).zip *
 
 # ---- native tests of the rewrite engine (gcc + libc on Linux)
 HOSTCC     ?= gcc
@@ -102,7 +105,8 @@ test: $(B)/test_engine
 	$(B)/test_engine
 
 install: all
-	install -m 0644 $(B)/urlmagic4.dll $(B)/urlmagic4tab.dll $(B)/setup.exe README.md LICENSE CHANGELOG.md $(DEST)/
+	rm -f $(DEST)/setup.exe $(DEST)/urlmagic4-v*.exe
+	install -m 0644 $(B)/urlmagic4.dll $(B)/urlmagic4tab.dll $(B)/$(SETUP_EXE) README.md LICENSE CHANGELOG.md $(DEST)/
 
 clean:
 	rm -rf $(B)

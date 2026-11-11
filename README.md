@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/logo.png" alt="URL Magic 4" width="464"></p>
+
 # urlmagic4
 
 URL rewriting for **IIS 4.0 on Windows NT 4.0**, as an ISAPI filter.
@@ -32,17 +34,19 @@ their trademark.
 
 Requirements: Windows NT 4.0 (SP6a recommended) with IIS 4.0, any 486 or later CPU.
 
-1. Download `urlmagic4-<version>.zip` from the
+1. Download `urlmagic4-v<version>.zip` from the
    [releases](https://github.com/muncherelli/urlmagic4/releases), unzip it on the server.
-2. Close Internet Service Manager, then from a command prompt in the unzipped folder:
+2. Close Internet Service Manager, then from a command prompt in the unzipped folder run the
+   installer, e.g.:
 
    ```
-   setup
+   urlmagic4-v4.0.0
    ```
 
-   This stops the WWW service, copies everything to `%SystemDrive%\urlmagic4`, registers the
-   URL Magic 4 tab, adds urlmagic4 to IIS's ISAPI filters and starts the WWW service again.
-   (`setup install D:\some\folder` installs elsewhere.)
+   It's a console program. It stops the WWW service, copies everything (itself included) to
+   `%SystemDrive%\urlmagic4`, registers the URL Magic 4 tab, adds urlmagic4 to IIS's ISAPI
+   filters and starts the WWW service again, printing each step.
+   (`urlmagic4-v4.0.0 install D:\some\folder` installs elsewhere.)
 3. Show the tab, once: open **Internet Service Manager**, **Console → Add/Remove Snap-in →
    Extensions**, choose *Internet Information Server*, tick **URL Magic 4**, OK, then
    **Console → Save**.
@@ -53,7 +57,8 @@ Each web site's **Properties → URL Magic 4** tab turns rewriting on or off and
 rules format and file. Settings live in `HKLM\SOFTWARE\urlmagic4\Sites\W3SVC\<site number>`.
 Problems in rules files are written to `urlmagic4.log` in the install folder.
 
-**Uninstall:** `setup uninstall` (keeps each site's settings) or `setup uninstall /purge`.
+**Uninstall:** `C:\urlmagic4\urlmagic4-v4.0.0 uninstall` (keeps each site's settings), or add
+`/purge` to remove those too.
 
 **Sites whose home directory is a network share:** IIS runs filters as LocalSystem, which
 can't read network shares. Keep that site's rules file on the server's own disk and choose it
@@ -65,9 +70,11 @@ folders by name instead (`RewriteRule ^assets/ - [L]`).
 On Linux with the MinGW-w64 i686 cross-compiler (`gcc-mingw-w64-i686` on Debian,
 `mingw-w64-gcc` on Arch):
 
-* `make` builds `build/urlmagic4.dll`, `build/urlmagic4tab.dll` and `build/setup.exe`
+* `make` builds `build/urlmagic4.dll`, `build/urlmagic4tab.dll` and the installer
+  `build/urlmagic4-v<version>.exe`
 * `make test` runs the rewrite engine's tests natively (needs `gcc`)
 * `make dist` makes the release zip
+* `python3 tools/make_art.py` redraws the icon and `docs/logo.png` from pixel art
 
 Releases use [semver](https://semver.org) and release-please (from Conventional Commits): see
 [docs/releasing.md](docs/releasing.md).
