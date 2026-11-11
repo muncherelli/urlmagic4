@@ -5,8 +5,17 @@ rule files from that product keep working. This page describes that format's beh
 written from that product's public documentation and black-box testing. urlmagic4 is not
 affiliated with Helicon Tech; ISAPI_Rewrite is their trademark.
 
-Items marked **(verify)** are not certain from the documentation and must be settled by
-testing against ISAPI_Rewrite 2 Lite on IIS 4.0 before they are implemented.
+**Compatibility only.** This format gets no features beyond what ISAPI_Rewrite 2.x had; the
+goal is identical behaviour, so existing `httpd.ini` files behave exactly as before.
+
+**How "identical" is checked:** `tests/compat/cases.py` holds conformance cases (rules plus
+requests). `tools/compat.py capture` runs them against the real ISAPI_Rewrite 2 Lite on IIS 4.0
+and records what it did in `tests/compat/oracle.json`; urlmagic's implementation must
+reproduce every recorded result. Where this page and the recording disagree, the recording
+wins and this page gets corrected.
+
+Items marked **(verify)** are not certain from the documentation and are covered by those
+cases.
 
 For the default Apache-style format and everything shared by both (target, build, IIS
 hooks, per-site settings), see [spec.md](spec.md).
@@ -38,7 +47,7 @@ a rules file on the server's own disk.
 | `RewriteRule` | `Pattern FormatString [Flags]` | global, site |
 | `RewriteCond` | `TestVerb Pattern [Flags]` | global, site; binds to the next `RewriteRule`/`RewriteHeader` only |
 | `RewriteHeader` | `HeaderName Pattern FormatString [Flags]` | global, site; empty result removes the header. `METHOD` rewrites the verb. Header name with or without colon (verify) |
-| `RepeatLimit` | `N` (default 32) | global, site (capped by the global value). 0 or 1 = no looping |
+| `RepeatLimit` | `N` (default 32) | global, site (capped by the global value). 0 or 1 = no looping. Past the limit, `N`/`NS` are simply ignored |
 | `EnableConfig` / `DisableConfig` | `[SiteID\|"Site name"]` | global: whether site files are read |
 | `EnableRewrite` / `DisableRewrite` | `[SiteID\|"Site name"]` | global: whether a site is rewritten at all |
 | `UriMatchPrefix` / `UriFormatPrefix` | `Prefix` | prepended to later patterns / format strings |
@@ -72,7 +81,7 @@ a rules file on the server's own disk.
 | `$0`, `$&` | whole match |
 | `` $` ``, `$'` | text before / after the match |
 | `?N<text>:<text>` | first text if group N matched, else the second (verify exact form) |
-| `\` + char | literal: `\(` `\)` `\$` `\?` `\:` (verify: backslash vs other) |
+| `\` + char | literal: `\(` `\)` `\$` `\?` `\:`. Backslash: real-world files write `http\://`; a surviving copy of the manual shows `/`, probably mangled (verify) |
 | `\n \r \t \xHH` | control / hex characters |
 
 The result replaces the URL. If the result contains `?`, the part after it becomes the new
@@ -90,7 +99,7 @@ query string.
 | `NS` | after rewriting, re-run from this same rule (bounded by `RepeatLimit`) |
 | `R` | redirect, 302 |
 | `RP` | redirect, 301 permanent |
-| `F` | refuse the request: 404 (verify: 403 or 404) |
+| `F` | refuse the request with **404** (the manual: "Not 403 Forbidden!") (verify) |
 | `CL` / `CU` | lowercase / uppercase the result |
 | `O` | normalise the input first (URL-decode, clean up) — drops the query string |
 | `U` | log the original URL in the IIS log instead of the rewritten one |

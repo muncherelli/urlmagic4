@@ -6,8 +6,9 @@ What urlmagic4 does. It reads rules in two formats; use whichever you prefer:
   Apache documentation and tutorials work with little or no change. Behaviour follows the
   Apache httpd documentation for mod_rewrite; where this spec says "as Apache", that document
   is the reference. urlmagic4 implements a subset, listed below.
-* **ISAPI_Rewrite 2** (`httpd.ini` style), so existing rule files from that product keep
-  working. Described in [httpd-ini.md](httpd-ini.md).
+* **ISAPI_Rewrite 2** (`httpd.ini` style), for compatibility only: existing rule files from that
+  product keep working, with exactly its behaviour and nothing added. Described in
+  [httpd-ini.md](httpd-ini.md). New features go into the Apache format.
 
 Both formats compile to the same internal rules and share one engine; only parsing and the
 few matching differences (whole-string matching, query string in the URL, group numbering)
@@ -53,7 +54,10 @@ RewriteRule ^(.*)$ index.cfm?page=$1 [L,QSA]
   to `urlmagic4.log.old`). A bad line is skipped; the rest of the file still loads.
 * The filter always refuses requests for `.htaccess`, `urlmagic4.conf`, `httpd.ini` and
   `httpd.parse.errors` (any folder, any case) with 403, so rule files can't be downloaded.
-* v1 reads `.htaccess` only in the site root; per-folder `.htaccess` files are later.
+* 4.0 reads `.htaccess` only in the site root. **Planned:** a `.htaccess` in any folder, applying
+  to that folder and below exactly as in Apache: its rules see the path relative to that
+  folder, `RewriteBase` defaults to it, and the deepest `.htaccess` with `RewriteEngine On`
+  is the one that runs (no inheritance unless `RewriteOptions Inherit`).
 
 ### Sites on network shares
 
@@ -84,8 +88,8 @@ re-reads it every few seconds.
 | `Redirect` | `[status] URL-path URL` (prefix match, as Apache mod_alias) |
 | `RedirectMatch` | `[status] regex URL` |
 
-Later: `RewriteMap`, `RewriteOptions`, per-folder files, `<IfModule>` (v1 ignores the wrapper
-lines and reads what's inside, so copied files still load).
+Later: `RewriteMap`, `RewriteOptions`, per-folder `.htaccess` files. `<IfModule>` wrapper lines
+are ignored and what's inside is read, so copied files still load.
 
 ## 5. Matching
 
