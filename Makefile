@@ -54,10 +54,22 @@ dist: all
 	cp $(B)/*.dll README.md LICENSE CHANGELOG.md $(B)/dist/
 	cd $(B)/dist && python3 -m zipfile -c ../urlmagic4-$(VERSION).zip *
 
+# ---- native tests of the rewrite engine (gcc + libc on Linux)
+HOSTCC     ?= gcc
+PCRE2_SRC   = $(wildcard third_party/pcre2/src/*.c)
+PCRE2_DEFS  = -DHAVE_CONFIG_H -DPCRE2_CODE_UNIT_WIDTH=8 -DPCRE2_STATIC -DMATCH_LIMIT=200000 -DHEAP_LIMIT=8192
+TEST_FLAGS  = -O1 -g -std=c99 -Wall -Wextra -D_DEFAULT_SOURCE -Ithird_party/pcre2/src $(PCRE2_DEFS)
+
+$(B)/test_engine: tests/test_engine.c src/engine/rewrite.c src/engine/rewrite.h $(PCRE2_SRC) | $(B)
+	$(HOSTCC) $(TEST_FLAGS) -fsanitize=address,undefined -o $@ tests/test_engine.c src/engine/rewrite.c $(PCRE2_SRC)
+
+test: $(B)/test_engine
+	$(B)/test_engine
+
 install: all
 	install -m 0644 $(B)/urlmagic4tab.dll $(DEST)/
 
 clean:
 	rm -rf $(B)
 
-.PHONY: all dist install clean
+.PHONY: all dist test install clean
