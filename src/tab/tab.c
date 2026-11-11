@@ -5,8 +5,10 @@
  * site's urlmagic4 settings (see ../common/settings.h) in the registry of the machine the
  * IIS manager is connected to.
  *
- *   regsvr32 urlmagic4tab.dll        register (then enable it once per console:
- *                                    Console > Add/Remove Snap-in > Extensions)
+ *   regsvr32 urlmagic4tab.dll        register; also listed as a "required extension" of the
+ *                                    IIS snap-in so consoles enable it without asking (where MMC
+ *                                    supports that; otherwise Console > Add/Remove Snap-in >
+ *                                    Extensions, once per console)
  *   regsvr32 /u urlmagic4tab.dll     remove
  */
 #define WIN32_LEAN_AND_MEAN
@@ -33,6 +35,8 @@ static const WCHAR CLSID_Tab_Str[] = L"{6349356F-8C6D-4813-94F6-7C8EB8085445}";
 static const GUID NODE_WEBSITE =
     {0xa841b6c7, 0x7577, 0x11d0, {0xbb, 0x1f, 0x00, 0xa0, 0xc9, 0x22, 0xe7, 0x9c}};
 static const WCHAR NODE_WEBSITE_Str[] = L"{A841B6C7-7577-11D0-BB1F-00A0C922E79C}";
+/* the IIS 4 snap-in itself */
+static const WCHAR SNAPIN_IIS_Str[] = L"{A841B6C2-7577-11D0-BB1F-00A0C922E79C}";
 
 static const IID IID_UmExtendPropertySheet =
     {0x85de64dc, 0xef21, 0x11cf, {0xa2, 0x85, 0x00, 0xc0, 0x4f, 0xd8, 0xdb, 0xe6}};
@@ -491,6 +495,11 @@ HRESULT WINAPI DllRegisterServer(void)
     if (r == ERROR_SUCCESS) r = set_str(HKEY_LOCAL_MACHINE, path, L"NameString", TAB_NAME);
     wsprintfW(path, L"%s\\%s\\Extensions\\PropertySheet", MMC_NODETYPES, NODE_WEBSITE_Str);
     if (r == ERROR_SUCCESS) r = set_str(HKEY_LOCAL_MACHINE, path, CLSID_Tab_Str, TAB_NAME);
+    /* best effort: MMC always enables a snap-in's required extensions */
+    if (r == ERROR_SUCCESS) {
+        wsprintfW(path, L"%s\\%s\\RequiredExtensions\\%s", MMC_SNAPINS, SNAPIN_IIS_Str, CLSID_Tab_Str);
+        set_str(HKEY_LOCAL_MACHINE, path, NULL, TAB_NAME);
+    }
     return r == ERROR_SUCCESS ? S_OK : HRESULT_FROM_WIN32(r);
 }
 
@@ -504,6 +513,8 @@ HRESULT WINAPI DllUnregisterServer(void)
         RegDeleteValueW(k, CLSID_Tab_Str);
         RegCloseKey(k);
     }
+    wsprintfW(path, L"%s\\%s\\RequiredExtensions\\%s", MMC_SNAPINS, SNAPIN_IIS_Str, CLSID_Tab_Str);
+    RegDeleteKeyW(HKEY_LOCAL_MACHINE, path);
     wsprintfW(path, L"%s\\%s", MMC_SNAPINS, CLSID_Tab_Str);
     delete_tree(HKEY_LOCAL_MACHINE, path);
     wsprintfW(path, L"CLSID\\%s", CLSID_Tab_Str);

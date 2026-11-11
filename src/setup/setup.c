@@ -1,10 +1,10 @@
 /*
- * urlmagic4-v<version>.exe - console installer for urlmagic4 on IIS 4.0.
+ * urlmagic<version>.exe (e.g. urlmagic4.0.0.exe) - console installer for urlmagic4 on IIS 4.0.
  *
- *   urlmagic4-v4.0.0                    install to %SystemDrive%\urlmagic4
- *   urlmagic4-v4.0.0 install [dir]      install to dir
- *   urlmagic4-v4.0.0 uninstall          remove (keeps each site's settings)
- *   urlmagic4-v4.0.0 uninstall /purge   remove, including each site's settings
+ *   urlmagic4.0.0                       ask, then install / upgrade / uninstall (double-click)
+ *   urlmagic4.0.0 install [dir]         install to dir (default %SystemDrive%\urlmagic4)
+ *   urlmagic4.0.0 uninstall          remove (keeps each site's settings)
+ *   urlmagic4.0.0 uninstall /purge   remove, including each site's settings
  *
  * Everything it installs is inside it (RCDATA resources, see payload.h), so this one file is
  * all you need. It also copies itself into the install folder, to uninstall later.
@@ -36,7 +36,8 @@ static const WCHAR *FILES[] = { L"urlmagic4.dll", L"urlmagic4tab.dll", L"README.
 static const int FILE_IDS[] = { ID_FILTER_DLL, ID_TAB_DLL, ID_README, ID_LICENSE, ID_CHANGELOG };
 
 static HANDLE g_out;
-static WCHAR g_self[MAX_PATH];         /* this program's file name, e.g. urlmagic4-v4.0.0.exe */
+static WCHAR g_self[MAX_PATH];         /* this program's file name, e.g. urlmagic4.0.0.exe */
+static BOOL g_interactive;             /* double-clicked: ask, and wait before closing */
 static int g_errors;
 
 /* ---------------------------------------------------------------- console output */
@@ -326,6 +327,74 @@ static void record_dir(const WCHAR *dir)
     }
 }
 
+/* ---------------------------------------------------------------- talking to the user */
+
+/* first non-blank character of a line typed by the user, lowercased; 0 for just Enter */
+static int ask(const char *question)
+{
+    char line[64];
+    DWORD n = 0, i;
+    out(question);
+    if (!ReadFile(GetStdHandle(STD_INPUT_HANDLE), line, sizeof line - 1, &n, NULL)) return 0;
+    for (i = 0; i < n; i++) {
+        char c = line[i];
+        if (c == '\r' || c == '\n') break;
+        if (c != ' ' && c != '\t') return (c >= 'A' && c <= 'Z') ? c + 32 : c;
+    }
+    return 0;
+}
+
+static void wait_to_close(void)
+{
+    char line[16];
+    DWORD n;
+    out("\r\nPress Enter to close this window.");
+    ReadFile(GetStdHandle(STD_INPUT_HANDLE), line, sizeof line, &n, NULL);
+}
+
+/* ---------------------------------------------------------------- is this NT 4.0 with IIS 4.0? */
+
+static BOOL check_system(void)
+{
+    OSVERSIONINFOA v;
+    HKEY k;
+    DWORD major = 0, minor = 0, size, type;
+    char line[200];
+
+    out("Checking the system\r\n");
+    memset(&v, 0, sizeof v);
+    v.dwOSVersionInfoSize = sizeof v;
+    GetVersionExA(&v);
+    step("Windows");
+    if (v.dwPlatformId != VER_PLATFORM_WIN32_NT) {
+        out("FAILED: this is Windows 95/98/Me. urlmagic needs Windows NT 4.0 with IIS 4.0.\r\n");
+        return FALSE;
+    }
+    wsprintfA(line, "NT %lu.%lu%s%s", v.dwMajorVersion, v.dwMinorVersion,
+              v.szCSDVersion[0] ? " " : "", v.szCSDVersion);
+    out(line);
+    if (v.dwMajorVersion != 4) out(" (not NT 4.0: untested, carrying on)");
+    out("\r\n");
+
+    step("IIS");
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\InetStp", 0, KEY_READ, &k) == ERROR_SUCCESS) {
+        size = sizeof major;
+        RegQueryValueExW(k, L"MajorVersion", NULL, &type, (BYTE *)&major, &size);
+        size = sizeof minor;
+        RegQueryValueExW(k, L"MinorVersion", NULL, &type, (BYTE *)&minor, &size);
+        RegCloseKey(k);
+    }
+    if (!major) {
+        out("FAILED: IIS isn't installed (install it from the NT 4.0 Option Pack).\r\n");
+        return FALSE;
+    }
+    wsprintfA(line, "%lu.%lu", major, minor);
+    out(line);
+    if (major != 4) out(" (not IIS 4.0: untested, carrying on)");
+    out("\r\n\r\n");
+    return TRUE;
+}
+
 /* Write one embedded file to path; returns 0 or a Win32 error code. */
 static DWORD extract(int id, const WCHAR *path)
 {
@@ -393,10 +462,11 @@ static int install(const WCHAR *dir)
     if (www(TRUE, NULL)) ok();
 
     if (g_errors) { out("\r\nSetup finished with errors (see above).\r\n"); return 1; }
-    out("\r\nDone. Two things to do by hand:\r\n\r\n"
-        "  1. Show the tab: open Internet Service Manager, Console > Add/Remove Snap-in >\r\n"
-        "     Extensions, choose Internet Information Server, tick URL Magic, OK,\r\n"
-        "     then Console > Save.\r\n"
+    out("\r\nDone.\r\n\r\n"
+        "  1. Open Internet Service Manager, right-click a web site > Properties >\r\n"
+        "     URL Magic. If the tab isn't there, enable it once: Console > Add/Remove\r\n"
+        "     Snap-in > Extensions, choose Internet Information Server, tick URL Magic,\r\n"
+        "     OK, then Console > Save.\r\n"
         "  2. Add rules: a .htaccess file in a web site's home directory, e.g.\r\n\r\n"
         "       RewriteEngine On\r\n"
         "       RewriteCond %{REQUEST_FILENAME} !-f\r\n"
@@ -508,9 +578,9 @@ static int uninstall(BOOL purge)
 
 static void usage(void)
 {
-    out("urlmagic4 " UM_VERSION_STR " setup\r\n\r\n  ");
-    outw(g_self); out("                    install to %SystemDrive%\\urlmagic4\r\n  ");
-    outw(g_self); out(" install [folder]   install to folder\r\n  ");
+    out("urlmagic " UM_VERSION_STR " setup\r\n\r\n  ");
+    outw(g_self); out("                    ask what to do\r\n  ");
+    outw(g_self); out(" install [folder]   install or upgrade (default %SystemDrive%\\urlmagic4)\r\n  ");
     outw(g_self); out(" uninstall          remove urlmagic4 (keeps site settings)\r\n  ");
     outw(g_self); out(" uninstall /purge   remove urlmagic4 and every site's settings\r\n");
 }
@@ -531,21 +601,56 @@ void WINAPI start(void)
         lstrcpynW(g_self, path + i, MAX_PATH);
     }
     CoInitialize(NULL);
+    g_interactive = argv && argc == 1;
 
+    out("urlmagic " UM_VERSION_STR " setup - URL rewriting for IIS 4.0\r\n\r\n");
     if (!argv) rc = 1;
-    else if (argc == 1 || (argc >= 2 && lstrcmpiW(argv[1], L"install") == 0)) {
+    else if (argc >= 2 && lstrcmpiW(argv[1], L"uninstall") != 0 && lstrcmpiW(argv[1], L"install") != 0) {
+        usage();
+        rc = (lstrcmpiW(argv[1], L"/?") == 0 || lstrcmpiW(argv[1], L"-h") == 0 ||
+              lstrcmpiW(argv[1], L"help") == 0) ? 0 : 2;
+    } else if (!check_system()) {
+        rc = 1;
+    } else if (g_interactive) {
+        WCHAR have[MAX_PATH], ver[32];
+        HKEY k;
+        DWORD type, size = sizeof ver;
+        int c;
+        ver[0] = 0;
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\urlmagic4", 0, KEY_READ, &k) == ERROR_SUCCESS) {
+            RegQueryValueExW(k, L"Version", NULL, &type, (BYTE *)ver, &size);
+            RegCloseKey(k);
+        }
+        if (installed_dir(have)) {
+            out("urlmagic ");
+            outw(ver[0] ? ver : L"(unknown version)");
+            out(" is installed in ");
+            outw(have);
+            out(".\r\n\r\n");
+            c = ask("[I]nstall " UM_VERSION_STR " over it, [U]ninstall, or [Q]uit? ");
+            out("\r\n");
+            if (c == 'i') rc = install(have);
+            else if (c == 'u') rc = uninstall(FALSE);
+            else out("Nothing changed.\r\n");
+        } else {
+            default_dir(dir);
+            out("Install urlmagic " UM_VERSION_STR " to ");
+            outw(dir);
+            c = ask("? [Y/n] ");
+            out("\r\n");
+            if (c == 0 || c == 'y') rc = install(dir);
+            else out("Nothing changed.\r\n");
+        }
+    } else if (lstrcmpiW(argv[1], L"install") == 0) {
         if (argc >= 3) {
             if (!GetFullPathNameW(argv[2], MAX_PATH, dir, NULL)) lstrcpynW(dir, argv[2], MAX_PATH);
         } else default_dir(dir);
         rc = install(dir);
     } else if (lstrcmpiW(argv[1], L"uninstall") == 0) {
         rc = uninstall(argc >= 3 && lstrcmpiW(argv[2], L"/purge") == 0);
-    } else {
-        usage();
-        rc = (lstrcmpiW(argv[1], L"/?") == 0 || lstrcmpiW(argv[1], L"-h") == 0 ||
-              lstrcmpiW(argv[1], L"help") == 0) ? 0 : 2;
     }
 
+    if (g_interactive) wait_to_close();
     if (argv) LocalFree(argv);
     CoUninitialize();
     ExitProcess((UINT)rc);

@@ -1,12 +1,12 @@
 # urlmagic4 - built with the MinGW-w64 i686 cross-compiler, for Windows NT 4.0 on 486+ CPUs.
 #   make            build/urlmagic4.dll (the filter), build/urlmagic4tab.dll (the tab) and
-#                   build/urlmagic4-v<version>.exe (the installer)
+#                   build/urlmagic<version>.exe, e.g. urlmagic4.0.0.exe (the installer)
 #   make test       run the rewrite engine's tests natively
-#   make dist       build/urlmagic4-v<version>.zip (the installer + README, LICENSE, CHANGELOG)
+#   make dist       build/urlmagic<version>.zip (the installer + README, LICENSE, CHANGELOG)
 #   make install    copy the DLLs to $(DEST) (default ~/Development/files)
 comma := ,
 VERSION := $(strip $(shell cat version.txt))
-SETUP_EXE   = urlmagic4-v$(VERSION).exe
+SETUP_EXE   = urlmagic$(VERSION).exe
 VERSION_NUM := $(subst .,$(comma),$(firstword $(subst -, ,$(VERSION))))$(comma)0
 CC      = i686-w64-mingw32-gcc
 WINDRES = i686-w64-mingw32-windres
@@ -68,7 +68,7 @@ $(B)/pcre2/%.o: third_party/pcre2/src/%.c | $(B)
 	$(CC) $(CFLAGS) -w -Ithird_party/pcre2/src $(PCRE2_DEFS) -c -o $@ $<
 
 $(B)/$(SETUP_EXE): $(SETUP_OBJS)
-	rm -f $(B)/urlmagic4-v*.exe
+	rm -f $(B)/urlmagic[0-9]*.exe
 	$(CC) -nostdlib -s -Wl,-e,_start@0 -Wl,--subsystem,console:4.0 \
 	  -Wl,--major-os-version,4,--minor-os-version,0 \
 	  -Wl,--disable-dynamicbase,--disable-nxcompat -o $@ $(SETUP_OBJS) $(SETUP_LIBS)
@@ -95,10 +95,10 @@ $(B)/nocrt.o: src/common/nocrt.c | $(B)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 dist: all
-	rm -rf $(B)/dist $(B)/urlmagic4-v*.zip
+	rm -rf $(B)/dist $(B)/urlmagic[0-9]*.zip
 	mkdir -p $(B)/dist
 	cp $(B)/$(SETUP_EXE) README.md LICENSE CHANGELOG.md $(B)/dist/
-	cd $(B)/dist && python3 -m zipfile -c ../urlmagic4-v$(VERSION).zip *
+	cd $(B)/dist && python3 -m zipfile -c ../urlmagic$(VERSION).zip *
 
 # ---- native tests of the rewrite engine (gcc + libc on Linux)
 HOSTCC     ?= gcc
@@ -111,9 +111,10 @@ test: $(B)/test_engine
 	$(B)/test_engine
 
 install: all
-	rm -f $(DEST)/setup.exe $(DEST)/urlmagic4-v*.exe
+	rm -f $(DEST)/setup.exe $(DEST)/urlmagic4-v*.exe $(DEST)/urlmagic[0-9]*.exe
 	rm -f $(DEST)/urlmagic4.dll $(DEST)/urlmagic4tab.dll $(DEST)/README.md $(DEST)/LICENSE $(DEST)/CHANGELOG.md
-	install -m 0644 $(B)/$(SETUP_EXE) $(DEST)/
+	@# executable, or Samba refuses to let Windows run it
+	install -m 0755 $(B)/$(SETUP_EXE) $(DEST)/
 
 clean:
 	rm -rf $(B)

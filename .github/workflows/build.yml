@@ -22,5 +22,5 @@ jobs:
         with:
           name: urlmagic4
           path: |
-            build/urlmagic4-v*.exe
-            build/urlmagic4-v*.zip
+            build/urlmagic[0-9]*.exe
+            build/urlmagic[0-9]*.zip

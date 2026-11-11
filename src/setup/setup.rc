@@ -22,7 +22,7 @@ BEGIN
             VALUE "FileVersion",      UM_VERSION_STR "\0"
             VALUE "InternalName",     "urlmagic4-setup\0"
             VALUE "LegalCopyright",   "MIT License\0"
-            VALUE "OriginalFilename", "urlmagic4-v" UM_VERSION_STR ".exe\0"
+            VALUE "OriginalFilename", "urlmagic" UM_VERSION_STR ".exe\0"
             VALUE "ProductName",      "urlmagic4\0"
             VALUE "ProductVersion",   UM_VERSION_STR "\0"
         END

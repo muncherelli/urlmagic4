@@ -21,7 +21,7 @@ Commit messages on `trunk` decide the next version:
    ("chore(trunk): release 4.1.0"). It bumps `version.txt` and adds the new section to
    `CHANGELOG.md`.
 2. Merge it when you want to release. The workflow tags `v<version>`, creates the GitHub
-   release, builds the installer `urlmagic4-v<version>.exe` (and a zip with it plus the docs) and attaches them.
+   release, builds the installer `urlmagic<version>.exe`, e.g. `urlmagic4.0.0.exe` (and a zip with it plus the docs) and attaches them.
 
 The version in `version.txt` is stamped into the DLLs and the installer (and its file name) by the Makefile.
 

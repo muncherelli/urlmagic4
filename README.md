@@ -34,22 +34,17 @@ their trademark.
 
 Requirements: Windows NT 4.0 (SP6a recommended) with IIS 4.0, any 486 or later CPU.
 
-1. Download the installer `urlmagic4-v<version>.exe` from the
+1. Download the installer, e.g. `urlmagic4.0.0.exe`, from the
    [releases](https://github.com/muncherelli/urlmagic4/releases) and copy it to the server.
    It's a single file: both DLLs and the docs are inside it.
-2. Close Internet Service Manager, then run it from a command prompt, e.g.:
-
-   ```
-   urlmagic4-v4.0.0
-   ```
-
-   It's a console program. It stops the WWW service, unpacks everything (and a copy of itself) to
-   `%SystemDrive%\urlmagic4`, registers the URL Magic tab, adds urlmagic4 to IIS's ISAPI
-   filters and starts the WWW service again, printing each step.
-   (`urlmagic4-v4.0.0 install D:\some\folder` installs elsewhere.)
-3. Show the tab, once: open **Internet Service Manager**, **Console → Add/Remove Snap-in →
-   Extensions**, choose *Internet Information Server*, tick **URL Magic**, OK, then
-   **Console → Save**.
+2. Close Internet Service Manager and double-click it. It checks for Windows NT 4.0 and
+   IIS 4.0, asks before changing anything, and shows each step:  stop the WWW service, unpack
+   everything (and a copy of itself) to `%SystemDrive%\urlmagic4`, register the URL Magic tab,
+   add urlmagic4 to IIS's ISAPI filters, start the WWW service. Run it again later to upgrade
+   or uninstall. From a command prompt: `urlmagic4.0.0 install [folder]`.
+3. Open **Internet Service Manager** → a web site's **Properties** → **URL Magic**. If the tab
+   isn't there, enable it once: **Console → Add/Remove Snap-in → Extensions**, choose
+   *Internet Information Server*, tick **URL Magic**, OK, then **Console → Save**.
 4. Put a `.htaccess` in a web site's home directory (see the example above). Changes are
    picked up within a couple of seconds; no restart needed.
 
@@ -57,8 +52,8 @@ Each web site's **Properties → URL Magic** tab turns rewriting on or off and c
 rules format and file. Settings live in `HKLM\SOFTWARE\urlmagic4\Sites\W3SVC\<site number>`.
 Problems in rules files are written to `urlmagic4.log` in the install folder.
 
-**Uninstall:** `C:\urlmagic4\urlmagic4-v4.0.0 uninstall` (keeps each site's settings), or add
-`/purge` to remove those too.
+**Uninstall:** run the installer again and choose *Uninstall*, or
+`C:\urlmagic4\urlmagic4.0.0 uninstall` (keeps each site's settings; add `/purge` to remove those too).
 
 **Sites whose home directory is a network share:** IIS runs filters as LocalSystem, which
 can't read network shares. Keep that site's rules file on the server's own disk and choose it
@@ -71,7 +66,7 @@ On Linux with the MinGW-w64 i686 cross-compiler (`gcc-mingw-w64-i686` on Debian,
 `mingw-w64-gcc` on Arch):
 
 * `make` builds `build/urlmagic4.dll`, `build/urlmagic4tab.dll` and the installer
-  `build/urlmagic4-v<version>.exe`
+  `build/urlmagic<version>.exe`
 * `make test` runs the rewrite engine's tests natively (needs `gcc`)
 * `make dist` makes the release zip
 * `python3 tools/make_art.py` redraws the icon and `docs/logo.png` from pixel art
