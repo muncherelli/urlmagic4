@@ -1,5 +1,18 @@
 # Changelog
 
+## [4.1.0](https://github.com/muncherelli/urlmagic4/compare/v4.0.0...v4.1.0) (2026-11-11)
+
+
+### Features
+
+* sites are off until turned on; faster rule matching ([#9](https://github.com/muncherelli/urlmagic4/issues/9)) ([1b6a506](https://github.com/muncherelli/urlmagic4/commit/1b6a5061cc686982cdb2ffda1cc50e181f7ebc4e))
+
+
+### Bug Fixes
+
+* **engine:** clean up the fast path's test switch and %00 handling ([#10](https://github.com/muncherelli/urlmagic4/issues/10)) ([a9761be](https://github.com/muncherelli/urlmagic4/commit/a9761be5fcf68db9917bf5fe86cfc2edc1fd3c0d))
+* **setup:** leave the README's HTML logo line out of README.txt ([#7](https://github.com/muncherelli/urlmagic4/issues/7)) ([2339a34](https://github.com/muncherelli/urlmagic4/commit/2339a34ce5269659528506d72e45815c077359ed))
+
 ## 4.0.0 (2026-11-11)
 
 
