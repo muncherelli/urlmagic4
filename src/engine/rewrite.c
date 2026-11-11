@@ -107,16 +107,32 @@ enum {
     F_C = 256, F_END = 512, F_OR = 1024
 };
 
+/* Patterns simple enough to match without PCRE2: a plain string with optional ^ and $, or a
+   catch-all such as ^(.*)$. Subjects containing a newline still go to PCRE2 ('.' and '$'
+   treat it specially). */
+enum { FP_NONE = 0, FP_LIT, FP_ALL };
+
+typedef struct {
+    int kind;
+    int start, end;      /* FP_LIT: anchored with ^ / $ */
+    int nocase;
+    int groups;          /* capture pairs a match fills: 1, or 2 for (.*) */
+    char *lit;           /* FP_LIT: the string, escapes resolved */
+    size_t len;
+} fastpat;
+
 typedef struct {
     char *test;          /* TestString template */
     int kind, negate, flags;
     char *str;           /* C_EQ / C_LT / C_GT */
     pcre2_code *re;      /* C_REGEX */
+    fastpat fp;
 } cond;
 
 typedef struct {
     int type, negate, flags, status, skip, line;
     pcre2_code *re;      /* R_REWRITE, R_REDIRECTMATCH */
+    fastpat fp;
     char *prefix;        /* R_REDIRECT */
     size_t plen;         /* strlen(prefix) */
     char *subst;         /* NULL = "-" (no substitution); for redirects the target URL */
@@ -150,6 +166,7 @@ static void say(parser *p, const char *a, const char *b)
 
 static void free_cond(cond *c)
 {
+    free(c->fp.lit);
     free(c->test);
     free(c->str);
     if (c->re) pcre2_code_free(c->re);
@@ -158,6 +175,7 @@ static void free_cond(cond *c)
 static void free_rule(rule *r)
 {
     int i;
+    free(r->fp.lit);
     if (r->re) pcre2_code_free(r->re);
     free(r->prefix);
     free(r->subst);
@@ -196,6 +214,49 @@ static pcre2_code *compile(parser *p, const char *pat, int nocase)
         if (s) { say(p, s, NULL); free(s); }
     }
     return re;
+}
+
+/* Fill f if pat can be matched without PCRE2 (see fastpat); leaves f->kind FP_NONE if not. */
+static void analyze(const char *pat, int nocase, fastpat *f)
+{
+    size_t n = strlen(pat), i, j = 0;
+    char *lit;
+
+    memset(f, 0, sizeof *f);
+    f->nocase = nocase;
+    if (*pat == '^') { f->start = 1; pat++; n--; }
+    if (n && pat[n - 1] == '$') {
+        if (n >= 2 && pat[n - 2] == '\\') return;          /* \$ : too subtle, leave to PCRE2 */
+        f->end = 1;
+        n--;
+    }
+    if ((n == 4 && memcmp(pat, "(.*)", 4) == 0) || (n == 2 && memcmp(pat, ".*", 2) == 0)) {
+        f->kind = FP_ALL;                       /* matches the whole subject, anchored or not */
+        f->groups = n == 4 ? 2 : 1;
+        return;
+    }
+    lit = malloc(n + 1);
+    if (!lit) return;
+    for (i = 0; i < n; i++) {
+        char c = pat[i];
+        if (c == '\\') {
+            char e = pat[++i];
+            /* \. \/ \- ... are the character itself; \d \w \b etc. are not */
+            if (i >= n || (e >= '0' && e <= '9') || (e >= 'a' && e <= 'z') || (e >= 'A' && e <= 'Z') ||
+                (unsigned char)e >= 0x80) { free(lit); return; }
+            lit[j++] = e;
+        } else if (strchr(".[]()*+?{}|^$", c)) {
+            free(lit);
+            return;
+        } else {
+            lit[j++] = c;
+        }
+    }
+    lit[j] = 0;
+    f->kind = FP_LIT;
+    f->groups = 1;
+    f->lit = lit;
+    f->len = j;
 }
 
 /* ---------------------------------------------------------------- tokenizer */
@@ -337,6 +398,7 @@ static int d_cond(parser *p, condlist *cl, int argc, char **argv)
         c.kind = C_REGEX;
         c.re = compile(p, pat, flags & F_NC);
         if (!c.re) return 0;
+        analyze(pat, flags & F_NC, &c.fp);
     }
     c.test = dup(argv[1]);
     if (cl->n == cl->cap) {
@@ -368,6 +430,7 @@ static int d_rule(parser *p, um_rules *r, condlist *cl, int argc, char **argv)
     if (!ru) { pcre2_code_free(re); return 0; }
     ru->type = R_REWRITE;
     ru->re = re;
+    analyze(pat, flags & F_NC, &ru->fp);
     ru->negate = negate;
     ru->flags = flags;
     ru->status = status;
@@ -416,6 +479,7 @@ static int d_redirect(parser *p, um_rules *r, int argc, char **argv, int match)
     if (match) {
         ru->re = compile(p, from, 0);
         if (!ru->re) { r->n--; free_rule(ru); return 0; }
+        analyze(from, 0, &ru->fp);
     } else {
         ru->prefix = dup(from);
         if (!ru->prefix) { r->n--; free_rule(ru); return 0; }
@@ -717,10 +781,56 @@ typedef struct {
 /* Every string here lives in the scratch and is never changed once made, so captures stay
    valid for the whole request. */
 
-/* match re against s (len bytes); fills c on success. 1 = match, 0 = no match, -1 = error */
-static int run(state *st, pcre2_code *re, const char *s, size_t len, caps *c)
+static int same(const char *a, const char *b, size_t n, int nocase)
+{
+    size_t i;
+    if (!nocase) return memcmp(a, b, n) == 0;
+    for (i = 0; i < n; i++)
+        if (lower((unsigned char)a[i]) != lower((unsigned char)b[i])) return 0;
+    return 1;
+}
+
+/* match a fastpat; same answers and captures as PCRE2 for subjects without a newline */
+static int fast_match(const fastpat *f, const char *s, size_t len, caps *c)
+{
+    size_t at = 0;
+    if (f->kind == FP_ALL) {
+        c->ov[0] = c->ov[2] = 0;
+        c->ov[1] = c->ov[3] = len;
+    } else {
+        if (len < f->len) return 0;
+        if (f->start && f->end) {
+            if (len != f->len || !same(s, f->lit, len, f->nocase)) return 0;
+        } else if (f->start) {
+            if (!same(s, f->lit, f->len, f->nocase)) return 0;
+        } else if (f->end) {
+            at = len - f->len;
+            if (!same(s + at, f->lit, f->len, f->nocase)) return 0;
+        } else {
+            for (;; at++) {
+                if (at + f->len > len) return 0;
+                if (same(s + at, f->lit, f->len, f->nocase)) break;
+            }
+        }
+        c->ov[0] = at;
+        c->ov[1] = at + f->len;
+    }
+    c->subj = s;
+    c->n = f->groups;
+    return 1;
+}
+
+/* match re (or its fast form) against s (len bytes); fills c on success.
+   1 = match, 0 = no match, -1 = error */
+static int run(state *st, pcre2_code *re, const fastpat *fp, const char *s, size_t len, caps *c)
 {
     pcre2_match_data *md = st->a->md;
+    if (fp && fp->kind != FP_NONE && !memchr(s, '\n', len)
+#ifdef UM_NO_FASTPATH
+        && 0
+#endif
+       )
+        return fast_match(fp, s, len, c);
     int rc = pcre2_match(re, (PCRE2_SPTR)s, len, 0, 0, md, NULL);
     PCRE2_SIZE *ov;
     int i;
@@ -812,7 +922,7 @@ static int eval_cond(state *st, const cond *c, const caps *rc, caps *last)
     case C_GT:   ok = cmp(v, c->str) > 0; break;
     case C_REGEX: {
         caps mc;
-        int r = run(st, c->re, v, n, &mc);
+        int r = run(st, c->re, &c->fp, v, n, &mc);
         ok = r == 1;
         if (ok && !c->negate) { *last = mc; keep = 1; }     /* %N point into v */
         break;
@@ -910,7 +1020,7 @@ int um_apply_s(const um_rules *r, const char *url, const um_env *env, um_scratch
             continue;
         }
         if (ru->type == R_REDIRECTMATCH) {
-            int mm = run(&st, ru->re, st.path, st.plen, &rc);
+            int mm = run(&st, ru->re, &ru->fp, st.path, st.plen, &rc);
             if (mm < 0) goto done;
             if (mm == 1) {
                 char *u;
@@ -930,7 +1040,7 @@ int um_apply_s(const um_rules *r, const char *url, const um_env *env, um_scratch
         {
             /* .htaccess style: matched without the leading slash */
             const char *subject = st.plen ? st.path + 1 : st.path;
-            int mm = run(&st, ru->re, subject, st.plen ? st.plen - 1 : 0, &rc);
+            int mm = run(&st, ru->re, &ru->fp, subject, st.plen ? st.plen - 1 : 0, &rc);
             int ok;
             if (mm < 0) goto done;
             ok = ru->negate ? mm == 0 : mm == 1;

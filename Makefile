@@ -133,9 +133,18 @@ $(B)/test_engine: tests/test_engine.c src/engine/rewrite.c src/engine/rewrite.h 
 $(B)/test_engine_exact: tests/test_engine.c src/engine/rewrite.c src/engine/rewrite.h $(PCRE2_SRC) | $(B)
 	$(HOSTCC) $(TEST_FLAGS) -DSCRATCH_BLOCK=1 -DUM_EXACT_CHUNKS -fsanitize=address,undefined -o $@ tests/test_engine.c src/engine/rewrite.c $(PCRE2_SRC)
 
-test: $(B)/test_engine $(B)/test_engine_exact
+# ... with the PCRE2-free fast path switched off, so every rule also passes through PCRE2
+$(B)/test_engine_nofast: tests/test_engine.c src/engine/rewrite.c src/engine/rewrite.h $(PCRE2_SRC) | $(B)
+	$(HOSTCC) $(TEST_FLAGS) -DUM_NO_FASTPATH -fsanitize=address,undefined -o $@ tests/test_engine.c src/engine/rewrite.c $(PCRE2_SRC)
+# the fast path against PCRE2, pattern by pattern
+$(B)/test_fastpath: tests/test_fastpath.c src/engine/rewrite.c src/engine/rewrite.h $(PCRE2_SRC) | $(B)
+	$(HOSTCC) $(TEST_FLAGS) -fsanitize=address,undefined -o $@ tests/test_fastpath.c $(PCRE2_SRC)
+
+test: $(B)/test_engine $(B)/test_engine_exact $(B)/test_engine_nofast $(B)/test_fastpath
 	$(B)/test_engine
 	$(B)/test_engine_exact
+	$(B)/test_engine_nofast
+	$(B)/test_fastpath
 
 install: all
 	rm -f $(DEST)/setup.exe $(DEST)/urlmagic4-v*.exe $(DEST)/urlmagic[0-9]*.exe
