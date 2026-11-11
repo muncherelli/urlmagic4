@@ -94,6 +94,13 @@ static void ui_init(void)
     g_color = GetConsoleMode(g_out, &mode) && GetConsoleScreenBufferInfo(g_out, &ci);
     if (g_color) g_attr0 = ci.wAttributes;
     SetConsoleTitleA("urlmagic " UM_VERSION_STR " setup");
+    {
+        /* the console window's own icon: undocumented, so only if kernel32 has it */
+        typedef BOOL (WINAPI *seticon_fn)(HICON);
+        seticon_fn seticon = (seticon_fn)GetProcAddress(GetModuleHandleA("kernel32.dll"), "SetConsoleIcon");
+        HICON icon = LoadIconW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(1));
+        if (seticon && icon) seticon(icon);
+    }
 }
 
 static void ui_done(void) { color(g_attr0); }
@@ -113,7 +120,55 @@ static const char *LOGO_FONT[][5] = {
 /* glyph index, or -1 for a word gap */
 static const int LOGO_TEXT[] = { 0, 1, 2, -1, 3, 4, 5, 6, 7, -1, 8 };
 #define LOGO_W 53
-#define BOX_W 63                         /* inside width */
+#define BOX_W 75                         /* inside width: 2 + icon 16 + 2 + logo 53 + 2 */
+
+/* the wand icon (same pixel art as res/urlmagic4.ico, tools/make_art.py), drawn with half
+   blocks: each character cell shows two pixels, one above the other */
+static const char *ICON_ART[16] = {
+    "..........Y.....",
+    "..........Y.....",
+    "........YYWYY...",
+    "..........Y..M..",
+    "....C.....Y.....",
+    "...CWC..WW......",
+    "....C..WWWK...Y.",
+    ".......WWKK..YWY",
+    "......KKKK....Y.",
+    ".....KKKK....R..",
+    "....KKKK....RR..",
+    "...KKKK....R.R..",
+    "..KKKK....R..R..",
+    ".KKKK.....RRRRR.",
+    ".KKK.........R..",
+    "..K..........R..",
+};
+
+/* console colour of an icon pixel; the black wand becomes dark grey on the black console */
+static WORD icon_color(char c)
+{
+    switch (c) {
+    case 'Y': return C_YELLOW;
+    case 'W': return C_WHITE;
+    case 'M': return C_MAGENTA;
+    case 'C': return C_CYAN;
+    case 'R': return C_RED;
+    case 'K': return C_DIM;
+    default:  return 0;
+    }
+}
+
+/* one row of the icon: pixel rows 2*row and 2*row+1 */
+static void icon_row(int row)
+{
+    int x;
+    for (x = 0; x < 16; x++) {
+        char top = ICON_ART[row * 2][x], bot = ICON_ART[row * 2 + 1][x];
+        if (top == '.' && bot == '.') { color(C_GREY); out(" "); }
+        else if (bot == '.') { color(icon_color(top)); outc((char)0xDF, 1); }          /* upper half */
+        else if (top == '.') { color(icon_color(bot)); outc((char)0xDC, 1); }          /* lower half */
+        else { color((WORD)(icon_color(top) | (icon_color(bot) << 4))); outc((char)0xDF, 1); }
+    }
+}
 
 static void box_edge(char left, char right)
 {
@@ -144,23 +199,28 @@ static void banner(void)
     int row, i, j;
     out("\r\n");
     box_edge((char)0xC9, (char)0xBB);
-    /* sparkles over the logo */
-    color(C_DCYAN); out("  \xBA");
-    color(C_YELLOW); out("      *          .        +                   .     *          ");
-    color(C_DCYAN); out("\xBA\r\n");
-    for (row = 0; row < 5; row++) {
+    /* icon on the left (8 rows), logo beside it (5 rows, rows 2-6) */
+    for (row = 0; row < 8; row++) {
+        int lr = row - 2;
         color(C_DCYAN);
-        out("  \xBA     ");
-        for (i = 0; i < (int)(sizeof LOGO_TEXT / sizeof LOGO_TEXT[0]); i++) {
-            int g = LOGO_TEXT[i];
-            const char *bits;
-            if (g < 0) { out("  "); continue; }
-            color(g <= 2 ? C_CYAN : g <= 7 ? C_MAGENTA : C_RED);
-            bits = LOGO_FONT[g][row];
-            for (j = 0; bits[j]; j++) outc(bits[j] == 'X' ? (char)0xDB : ' ', 1);
-            if (i + 1 < (int)(sizeof LOGO_TEXT / sizeof LOGO_TEXT[0]) && LOGO_TEXT[i + 1] >= 0) out(" ");
+        out("  \xBA  ");
+        icon_row(row);
+        color(C_GREY);
+        out("  ");
+        if (lr >= 0 && lr < 5) {
+            for (i = 0; i < (int)(sizeof LOGO_TEXT / sizeof LOGO_TEXT[0]); i++) {
+                int g = LOGO_TEXT[i];
+                const char *bits;
+                if (g < 0) { out("  "); continue; }
+                color(g <= 2 ? C_CYAN : g <= 7 ? C_MAGENTA : C_RED);
+                bits = LOGO_FONT[g][lr];
+                for (j = 0; bits[j]; j++) outc(bits[j] == 'X' ? (char)0xDB : ' ', 1);
+                if (i + 1 < (int)(sizeof LOGO_TEXT / sizeof LOGO_TEXT[0]) && LOGO_TEXT[i + 1] >= 0) out(" ");
+            }
+        } else {
+            outc(' ', LOGO_W);
         }
-        outc(' ', BOX_W - 5 - LOGO_W);
+        outc(' ', BOX_W - 2 - 16 - 2 - LOGO_W);
         color(C_DCYAN);
         out("\xBA\r\n");
     }
