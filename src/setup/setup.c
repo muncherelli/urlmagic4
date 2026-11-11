@@ -147,7 +147,7 @@ static void banner(void)
     /* sparkles over the logo */
     color(C_DCYAN); out("  \xBA");
     color(C_YELLOW); out("      *          .        +                   .     *          ");
-    color(C_DCYAN); out("  \xBA\r\n");
+    color(C_DCYAN); out("\xBA\r\n");
     for (row = 0; row < 5; row++) {
         color(C_DCYAN);
         out("  \xBA     ");
