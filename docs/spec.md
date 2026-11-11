@@ -1,9 +1,17 @@
 # urlmagic4 specification
 
-What urlmagic4 does. Rules use **Apache mod_rewrite syntax** (`.htaccess` style), so rules
-from Apache documentation and tutorials work with little or no change. Behaviour follows the
-Apache httpd documentation for mod_rewrite; where this spec says "as Apache", that document is
-the reference. urlmagic4 implements a subset, listed below.
+What urlmagic4 does. It reads rules in two formats; use whichever you prefer:
+
+* **Apache mod_rewrite** (`.htaccess` style), the default, described on this page. Rules from
+  Apache documentation and tutorials work with little or no change. Behaviour follows the
+  Apache httpd documentation for mod_rewrite; where this spec says "as Apache", that document
+  is the reference. urlmagic4 implements a subset, listed below.
+* **ISAPI_Rewrite 2** (`httpd.ini` style), so existing rule files from that product keep
+  working. Described in [httpd-ini.md](httpd-ini.md).
+
+Both formats compile to the same internal rules and share one engine; only parsing and the
+few matching differences (whole-string matching, query string in the URL, group numbering)
+depend on the format.
 
 ## 1. Target
 
@@ -31,16 +39,20 @@ RewriteRule ^(.*)$ index.cfm?page=$1 [L,QSA]
 
 | File | Where | Applies to |
 |---|---|---|
-| Server | `urlmagic4.conf` in the folder holding `urlmagic4.dll` | every site, runs first |
-| Site | `.htaccess` in the site's home directory (physical root) | that site |
+| Server | `urlmagic4.conf` **or** `httpd.ini` in the folder holding `urlmagic4.dll` | every site, runs first |
+| Site | `.htaccess` **or** `httpd.ini` in the site's home directory (physical root) | that site |
 
-* Same syntax in both. `#` starts a comment; blank lines ignored; a trailing `\` continues a
-  line.
+* The file name picks the format: `.htaccess` and `urlmagic4.conf` are Apache style,
+  `httpd.ini` is ISAPI_Rewrite 2 style. So the server file and a site can use different
+  formats.
+* One file per place: if both exist in the same folder, the Apache-style file is used and a
+  warning is logged.
+* Apache style: `#` starts a comment; blank lines ignored; a trailing `\` continues a line.
 * A file is re-read when it changes (checked at most once per second per file); no restart.
 * Errors are written to the Windows Application event log (source `urlmagic4`) with file and
   line. A bad line is skipped; the rest of the file still loads.
-* The filter always refuses requests for `.htaccess` and `urlmagic4.conf` (any folder, any
-  case) with 403, so rule files can't be downloaded.
+* The filter always refuses requests for `.htaccess`, `urlmagic4.conf`, `httpd.ini` and
+  `httpd.parse.errors` (any folder, any case) with 403, so rule files can't be downloaded.
 * v1 reads `.htaccess` only in the site root; per-folder `.htaccess` files are later.
 
 ### Sites on network shares
@@ -49,7 +61,7 @@ IIS runs filters as LocalSystem, which has no network credentials. For a site wh
 directory is a UNC share (e.g. a dev site served from Samba):
 
 * its `.htaccess` can't be read there. Server-file directive (urlmagic4 extension):
-  `SiteConfig <SiteID|"Site name"> <local path to a .htaccess>`.
+  `SiteConfig <SiteID|"Site name"> <local path to a .htaccess or httpd.ini>`.
 * `-f` / `-d` tests can't see its files and always report "missing". Exclude static folders
   by pattern instead (`RewriteRule ^assets/ - [L]`).
 
