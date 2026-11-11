@@ -145,6 +145,9 @@ typedef struct {
 
 static site g_sites[MAX_SITES];
 static HANDLE g_thread, g_stop;
+/* from the registry, refreshed every few seconds: is any site on / logging debug lines?
+   While no site is on, requests skip the site lookup altogether. */
+static volatile LONG g_any_on = 1, g_any_debug = 1;
 static DWORD g_tls = TLS_OUT_OF_INDEXES;
 
 static void ref_release(rules_ref *rr)
@@ -371,13 +374,20 @@ static snap *site_snap(DWORD id)
     return out;
 }
 
+static void update_any(BOOL log);
+
 /* The refresh thread: every second, bring every known site up to date. */
 static DWORD WINAPI refresher(LPVOID unused)
 {
     HRESULT init = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+    DWORD scanned = GetTickCount();
     (void)unused;
     while (WaitForSingleObject(g_stop, 1000) == WAIT_TIMEOUT) {
         int i;
+        if (tick_since(scanned) >= SETTINGS_EVERY) {
+            update_any(FALSE);
+            scanned = GetTickCount();
+        }
         for (i = 0; i < MAX_SITES; i++) {
             site *s = &g_sites[i];
             snap *n, *old = NULL;
@@ -486,6 +496,16 @@ static int env_file_type(void *ctx, const char *fspath)
 
 /* ---------------------------------------------------------------- responses */
 
+/* TRUE if the request has this header, or if we can't tell; v gets its value when it fits */
+static BOOL has_header(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr, char *name,
+                       char *v, DWORD cap)
+{
+    DWORD n = cap;
+    v[0] = 0;
+    if (hdr->GetHeader(pfc, name, v, &n)) return TRUE;
+    return GetLastError() != ERROR_INVALID_INDEX;
+}
+
 /* Send a whole small response in one piece (headers and body together: two small sends can
    stall on Nagle + delayed ACK). GET and HEAD over HTTP/1.1 without a body keep the
    connection open, so a proxy in front can reuse it. */
@@ -503,12 +523,11 @@ static DWORD respond(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr,
     head = ieq(method, "HEAD");
     keep = (head || ieq(method, "GET")) && ieq(version, "HTTP/1.1");
     if (keep) {
-        /* a body we didn't read must never be taken for the next request */
+        /* a body we didn't read must never be taken for the next request: keep the connection
+           only when there is certainly none (a header we can't read counts as a body) */
         char v[32];
-        n = sizeof v;
-        if (hdr->GetHeader(pfc, "Content-Length:", v, &n) && !(v[0] == '0' && v[1] == 0)) keep = FALSE;
-        n = sizeof v;
-        if (hdr->GetHeader(pfc, "Transfer-Encoding:", v, &n)) keep = FALSE;
+        if (has_header(pfc, hdr, "Content-Length:", v, sizeof v) && lstrcmpA(v, "0") != 0) keep = FALSE;
+        if (has_header(pfc, hdr, "Transfer-Encoding:", v, sizeof v)) keep = FALSE;
     }
 
     wsprintfA(body, "<html><head><title>%s</title></head><body><h1>%s</h1></body></html>", status, status);
@@ -568,8 +587,9 @@ static BOOL is_rules_file(const char *url)
 
 /* ---------------------------------------------------------------- ISAPI exports */
 
-/* At startup: one log line per site that has URL Magic settings (Sites\<service>\<n>). */
-static void log_sites(void)
+/* Count the sites that are on (and see whether any logs debug lines); with log, also write one
+   line per site that has URL Magic settings (Sites\<service>\<n>). */
+static int scan_sites(BOOL log, BOOL *any_debug)
 {
     static const char *fmts[] = { "automatic", "Apache", "httpd.ini" };
     HKEY root, svc;
@@ -577,9 +597,10 @@ static void log_sites(void)
     DWORD i, j, n;
     int count = 0;
 
+    *any_debug = FALSE;
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UM_REG_SITES, 0, KEY_READ, &root) != ERROR_SUCCESS) {
-        log_line("no site has URL Magic turned on yet");
-        return;
+        if (log) log_line("no site has URL Magic turned on yet");
+        return 0;
     }
     for (i = 0; n = 32, RegEnumKeyExW(root, i, service, &n, NULL, NULL, NULL, NULL) == ERROR_SUCCESS; i++) {
         if (RegOpenKeyExW(root, service, 0, KEY_READ, &svc) != ERROR_SUCCESS) continue;
@@ -591,6 +612,11 @@ static void log_sites(void)
             for (p = inst; *p >= L'0' && *p <= L'9'; p++) id = id * 10 + (DWORD)(*p - L'0');
             if (!id || *p) continue;
             um_site_read(HKEY_LOCAL_MACHINE, service, id, &cfg);
+            if (cfg.enabled) {
+                count++;
+                if (cfg.debug) *any_debug = TRUE;
+            }
+            if (!log) continue;
             WideCharToMultiByte(CP_ACP, 0, service, -1, sv, sizeof sv, NULL, NULL);
             if (cfg.source == UM_SRC_FILE)
                 WideCharToMultiByte(CP_ACP, 0, cfg.rules_file, -1, file, MAX_PATH, NULL, NULL);
@@ -600,12 +626,20 @@ static void log_sites(void)
                       cfg.enabled ? "on" : "off", fmts[cfg.format <= 2 ? cfg.format : 0], file,
                       cfg.debug ? ", debug on" : "");
             log_line(m);
-            if (cfg.enabled) count++;
         }
         RegCloseKey(svc);
     }
     RegCloseKey(root);
-    if (!count) log_line("no site has URL Magic turned on yet");
+    if (log && !count) log_line("no site has URL Magic turned on yet");
+    return count;
+}
+
+static void update_any(BOOL log)
+{
+    BOOL dbg;
+    int on = scan_sites(log, &dbg);
+    InterlockedExchange((LONG *)&g_any_on, on > 0);
+    InterlockedExchange((LONG *)&g_any_debug, dbg);
 }
 
 BOOL WINAPI GetFilterVersion(HTTP_FILTER_VERSION *ver)
@@ -615,7 +649,7 @@ BOOL WINAPI GetFilterVersion(HTTP_FILTER_VERSION *ver)
     ver->dwFlags = SF_NOTIFY_ORDER_HIGH | SF_NOTIFY_SECURE_PORT | SF_NOTIFY_NONSECURE_PORT |
                    SF_NOTIFY_PREPROC_HEADERS;
     log_line("urlmagic4 " UM_VERSION_STR " loaded");
-    log_sites();
+    update_any(TRUE);
     if (!g_thread) {
         DWORD tid;
         g_stop = CreateEventW(NULL, TRUE, FALSE, NULL);
@@ -625,12 +659,22 @@ BOOL WINAPI GetFilterVersion(HTTP_FILTER_VERSION *ver)
     return TRUE;
 }
 
-/* "site 3 debug: GET /old (Host dev.example.com) -> redirect 301 / by line 3, 42 µs" */
-static void debug_line(request *rq, DWORD id, const um_result *res, LONGLONG ticks, LONGLONG freq)
+/* "42 µs" or "12.345 ms"; \xB5 = the micro sign in Windows-1252, which the log (and Notepad) use */
+static void fmt_time(char *out, LONGLONG ticks, LONGLONG freq)
+{
+    ULONGLONG us = freq > 0 ? (ULONGLONG)ticks * 1000000u / (ULONGLONG)freq : 0;
+    if (us < 10000) wsprintfA(out, "%lu \xB5s", (unsigned long)us);
+    else wsprintfA(out, "%lu.%03lu ms", (unsigned long)(us / 1000), (unsigned long)(us % 1000));
+}
+
+/* "site 3 debug: GET /old (Host dev.example.com) -> redirect 301 / by line 3, rules 42 µs,
+   filter 60 µs" (filter = the whole request in URL Magic, rules included) */
+static void debug_line(request *rq, DWORD id, const um_result *res, LONGLONG rules, LONGLONG total)
 {
     char m[URL_CAP * 2 + 200], method[16], host[128], what[URL_CAP + 40], took[40];
     DWORD n;
-    ULONGLONG us = freq > 0 ? (ULONGLONG)ticks * 1000000u / (ULONGLONG)freq : 0;
+    LARGE_INTEGER freq;
+    LONGLONG f = QueryPerformanceFrequency(&freq) ? freq.QuadPart : 0;
 
     n = sizeof method;
     if (!rq->hdr->GetHeader(rq->pfc, "method", method, &n)) lstrcpyA(method, "?");
@@ -643,9 +687,6 @@ static void debug_line(request *rq, DWORD id, const um_result *res, LONGLONG tic
     case UM_FAIL:      lstrcpyA(what, "500 (rules failed: regex too complex?)"); break;
     default:           lstrcpyA(what, "unchanged"); break;
     }
-    /* \xB5 = the micro sign in Windows-1252, which the log (and Notepad) use */
-    if (us < 10000) wsprintfA(took, "%lu \xB5s", (unsigned long)us);
-    else wsprintfA(took, "%lu.%03lu ms", (unsigned long)(us / 1000), (unsigned long)(us % 1000));
     if (res->line) {
         char by[24];
         wsprintfA(by, " by line %d", res->line);
@@ -653,7 +694,11 @@ static void debug_line(request *rq, DWORD id, const um_result *res, LONGLONG tic
     }
     wsprintfA(m, "site %lu debug: %s %s (Host %s) -> ", (unsigned long)id, method, rq->url, host);
     cat(m, what, sizeof m);
-    cat(m, ", rules took ", sizeof m);
+    cat(m, ", rules ", sizeof m);
+    fmt_time(took, rules, f);
+    cat(m, took, sizeof m);
+    cat(m, ", filter ", sizeof m);
+    fmt_time(took, total, f);
     cat(m, took, sizeof m);
     log_line(m);
 }
@@ -669,10 +714,13 @@ static DWORD preproc(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr)
     um_result res;
     const char *p;
     DWORD ret = SF_STATUS_REQ_NEXT_NOTIFICATION;
-    LARGE_INTEGER t0, t1, freq;
+    LARGE_INTEGER ts, t0, t1;
 
+    ts.QuadPart = 0;
+    if (g_any_debug) QueryPerformanceCounter(&ts);
     if (!hdr->GetHeader(pfc, "url", url, &n)) return ret;
     if (is_rules_file(url)) return respond(pfc, hdr, "403 Forbidden", NULL);
+    if (!g_any_on) return ret;                  /* URL Magic is off everywhere */
 
     n = sizeof idbuf;
     if (!pfc->GetServerVariable(pfc, "INSTANCE_ID", idbuf, &n)) return ret;
@@ -708,8 +756,7 @@ static DWORD preproc(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr)
     else um_apply(sn->rules->r, url, &env, &res);
     if (sn->debug) {
         QueryPerformanceCounter(&t1);
-        debug_line(&rq, id, &res, t1.QuadPart - t0.QuadPart,
-                   QueryPerformanceFrequency(&freq) ? freq.QuadPart : 0);
+        debug_line(&rq, id, &res, t1.QuadPart - t0.QuadPart, ts.QuadPart ? t1.QuadPart - ts.QuadPart : 0);
     }
     switch (res.action) {
     case UM_REWRITE:
