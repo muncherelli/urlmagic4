@@ -247,8 +247,8 @@ static void banner(void)
 #define A_KEYBAR ((WORD)0x70)
 #define STEP_X   6
 #define TAG_X    66
-#define BAR_ROW  12
-#define RES_ROW  14
+#define BAR_ROW  11
+#define RES_ROW  13
 #define MAX_MSGS 6
 
 static BOOL g_tui;
@@ -303,14 +303,10 @@ static void tui_tag(int x, int y, const char *t, WORD fg)
     put(x + 5, y, A_TEXT, "]");
 }
 
-/* title line + double rule */
+/* a blank blue screen */
 static void tui_frame(void)
 {
-    static const char right[] = "The missing IIS tab";
-    clear_rows(0, SCR_H - 1);
-    put(2, 0, A_BRIGHT, "URL Magic " UM_VERSION_STR " Install/Uninstall");
-    put(SCR_W - 2 - lstrlenA(right), 0, A_TEXT, right);
-    fill(0, 1, ON_BLUE(C_CYAN), (char)0xCD, SCR_W);
+    clear_rows(0, SCR_H - 1);          /* the window title names the program */
 }
 
 static BOOL tui_begin(void)
@@ -341,7 +337,7 @@ static BOOL tui_begin(void)
     return TRUE;
 }
 
-/* wait for a key: lowercase letter, 13 = Enter, 27 = Esc or F3 */
+/* wait for a key: lowercase letter, 13 = Enter, 27 = Esc or F3, 3 = Ctrl+C */
 static int key(void)
 {
     INPUT_RECORD ir;
@@ -352,6 +348,7 @@ static int key(void)
             WORD vk = ir.Event.KeyEvent.wVirtualKeyCode;
             char ch = ir.Event.KeyEvent.uChar.AsciiChar;
             if (vk == VK_RETURN) return 13;
+            if (ch == 3) return 3;                                        /* Ctrl+C */
             if (vk == VK_ESCAPE || vk == VK_F3) return 27;
             if (ch >= 'A' && ch <= 'Z') ch = (char)(ch + 32);
             if (ch > ' ') return ch;
@@ -431,8 +428,8 @@ static void section(const char *title)
 {
     if (g_tui) {                         /* start the progress screen */
         tui_frame();
-        put(STEP_X - 2, 3, A_BRIGHT, title);
-        g_row = 5;
+        put(STEP_X - 2, 2, A_BRIGHT, title);
+        g_row = 4;
         g_done = 0;
         tui_bar();
         keybar("Please wait...");
@@ -1217,117 +1214,118 @@ static void get_sysinfo(sysinfo *si)
 
 enum { OK_ = 0, WARN_ = 1, FAIL_ = 2 };
 
-static void check_row(int y, const char *label, const char *val, int level)
+/* one cell of the two-column system check: label, value, result tag at tag_x */
+static void check_cell(int x, int y, int tag_x, const char *label, const char *val, int level)
 {
-    put(STEP_X + 2, y, A_TEXT, label);
-    put(32, y, A_BRIGHT, val);
-    if (level == OK_) tui_tag(TAG_X, y, " OK ", C_GREEN);
-    else if (level == WARN_) tui_tag(TAG_X, y, "WARN", C_YELLOW);
-    else if (level == FAIL_) tui_tag(TAG_X, y, "FAIL", C_RED);
+    put(x, y, A_TEXT, label);
+    put(x + 10, y, A_BRIGHT, val);
+    if (level == OK_) tui_tag(tag_x, y, " OK ", C_GREEN);
+    else if (level == WARN_) tui_tag(tag_x, y, "WARN", C_YELLOW);
+    else if (level == FAIL_) tui_tag(tag_x, y, "FAIL", C_RED);
 }
+
+#define MSG_ROW 18                           /* two message rows, then blank rows to the key bar */
 
 /* the splash screen; returns 'i' (install), 'u' (uninstall) or 'q' */
 static int splash(const sysinfo *si, BOOL *purge, BOOL remove)
 {
     char v[MAX_PATH + 40], d[MAX_PATH];
     const char *problem = NULL, *advice = NULL;
+    const char *quit = remove ? "ESC=Cancel   CTRL+C=Quit" : "ESC=Quit   CTRL+C=Quit";
+    char keys[100];
     int lw, ls, li, k;
 
     tui_frame();
-    tui_icon(7, 3);                          /* icon 16 + 3 + logo 46, visually centred */
-    tui_logo(7 + 16 + 3, 5);
-    put_center(12, ON_BLUE(C_YELLOW), "The missing IIS tab");
-    put_center(13, A_TEXT, "URL rewriting for IIS 4.0 on Windows NT 4.0");
+    tui_icon(7, 2);                          /* icon 16 + 3 + logo 46, visually centred */
+    tui_logo(7 + 16 + 3, 4);
+    put_center(11, ON_BLUE(C_YELLOW), "The missing IIS tab");
+    put_center(12, A_TEXT, "URL rewriting for IIS 4.0 on Windows NT 4.0");
 
-    put(STEP_X, 15, A_BRIGHT, "System check");
-    fill(STEP_X + 13, 15, ON_BLUE(C_DCYAN), (char)0xC4, TAG_X + 6 - (STEP_X + 13));
+    put(STEP_X, 14, A_BRIGHT, "System check");
+    fill(STEP_X + 13, 14, ON_BLUE(C_DCYAN), (char)0xC4, 76 - (STEP_X + 13));
 
-    /* Windows */
+    /* Windows + service pack, one cell */
     if (!si->nt) { lw = FAIL_; lstrcpyA(v, "Windows 95/98/Me"); problem = "urlmagic needs Windows NT 4.0."; }
     else {
-        wsprintfA(v, "Windows NT %lu.%lu  (build %lu)", si->major, si->minor, si->build);
+        char sp[16];
+        if (si->sp) wsprintfA(sp, " SP%d%s", si->sp, si->sp6a ? "a" : "");
+        else sp[0] = 0;
+        wsprintfA(v, "NT %lu.%lu%s (build %lu)", si->major, si->minor, sp, si->build);
         lw = si->major == 4 ? OK_ : WARN_;
         if (lw == WARN_) advice = "Not Windows NT 4.0: urlmagic is untested here.";
+        ls = OK_;
+        if (si->major == 4) {
+            if (si->sp < 3) { ls = FAIL_; problem = "IIS 4.0 needs NT 4.0 Service Pack 3 or later (6a recommended)."; }
+            else if (si->sp < 6) { ls = WARN_; if (!advice) advice = "Service Pack 6a is recommended."; }
+        }
+        if (ls > lw) lw = ls;
     }
-    check_row(16, "Windows", v, lw);
-    /* service pack */
-    if (si->sp == 0) lstrcpyA(v, "None");
-    else wsprintfA(v, "Service Pack %d%s", si->sp, si->sp6a ? "a" : "");
-    ls = OK_;
-    if (si->nt && si->major == 4) {
-        if (si->sp < 3) { ls = FAIL_; if (!problem) problem = "IIS 4.0 needs NT 4.0 Service Pack 3 or later (6a recommended)."; }
-        else if (si->sp < 6) { ls = WARN_; if (!advice) advice = "Service Pack 6a is recommended."; }
-    }
-    check_row(17, "Service pack", v, si->nt ? ls : -1);
+    check_cell(STEP_X + 2, 15, 44, "Windows", v, lw);
     /* IIS */
-    if (!si->iis_major) { li = FAIL_; lstrcpyA(v, "Not installed"); if (!problem) problem = "Install IIS 4.0 from the NT 4.0 Option Pack first."; }
+    if (!si->iis_major) { li = FAIL_; lstrcpyA(v, "missing"); if (!problem) problem = "Install IIS 4.0 from the NT 4.0 Option Pack first."; }
     else {
-        wsprintfA(v, "IIS %lu.%lu", si->iis_major, si->iis_minor);
+        wsprintfA(v, "%lu.%lu", si->iis_major, si->iis_minor);
         li = si->iis_major == 4 ? OK_ : WARN_;
         if (li == WARN_ && !advice) advice = "Not IIS 4.0: urlmagic is untested here.";
     }
-    check_row(18, "Web server", v, li);
+    check_cell(52, 15, 70, "IIS", v, li);
     /* administrator */
-    check_row(19, "Administrator", si->admin ? "Yes" : "No", si->admin ? OK_ : FAIL_);
+    check_cell(STEP_X + 2, 16, 44, "Admin", si->admin ? "yes" : "no", si->admin ? OK_ : FAIL_);
     if (!si->admin && !problem) problem = "Log on as an Administrator to install urlmagic.";
     /* urlmagic */
     if (si->installed) {
         WideCharToMultiByte(CP_OEMCP, 0, si->dir, -1, d, MAX_PATH, NULL, NULL);
         WideCharToMultiByte(CP_OEMCP, 0, si->ver[0] ? si->ver : L"?", -1, v, 32, NULL, NULL);
-        lstrcatA(v, " in ");
-        lstrcatA(v, d);
     } else {
-        lstrcpyA(v, "Not installed");
+        lstrcpyA(v, "not installed");
     }
-    check_row(20, "urlmagic", v, -1);
+    check_cell(52, 16, 70, "urlmagic", v, -1);
 
     if (remove && !si->installed && !problem) problem = "urlmagic isn't installed.";
     if (problem) {
-        put(STEP_X, 22, ON_BLUE(C_RED), "Setup can't continue:");
-        put(STEP_X + 22, 22, A_BRIGHT, problem);
-        keybar("ESC=Quit");
-        while (key() != 27) ;
+        put(STEP_X, MSG_ROW, ON_BLUE(C_RED), "Setup can't continue:");
+        put(STEP_X, MSG_ROW + 1, A_BRIGHT, problem);
+        keybar("ESC=Quit   CTRL+C=Quit");
+        while ((k = key()) != 27 && k != 3) ;
         return 'q';
     }
 
     for (;;) {
-        clear_rows(22, 23);
+        clear_rows(MSG_ROW, SCR_H - 2);
         if (remove) {
             wsprintfA(v, "Setup will remove urlmagic from %s.", d);
-            put(STEP_X, 22, A_BRIGHT, v);
-            put(STEP_X, 23, ON_BLUE(C_YELLOW), "Web sites go offline for a few seconds while the WWW service restarts.");
-            keybar("ENTER=Uninstall   ESC=Cancel");
-            k = key();
-            if (k == 27) return 'q';
-            if (k == 13) k = 'u';
         } else if (si->installed) {
-            WCHAR dflt[MAX_PATH];
-            default_dir(dflt);
             wsprintfA(v, "Setup will install urlmagic %s over the copy in %s.", UM_VERSION_STR, d);
-            put(STEP_X, 22, A_BRIGHT, v);
         } else {
             WCHAR dflt[MAX_PATH];
             default_dir(dflt);
             WideCharToMultiByte(CP_OEMCP, 0, dflt, -1, d, MAX_PATH, NULL, NULL);
             wsprintfA(v, "Setup will install urlmagic %s to %s.", UM_VERSION_STR, d);
-            put(STEP_X, 22, A_BRIGHT, v);
         }
-        if (!remove) {
-            put(STEP_X, 23, ON_BLUE(C_YELLOW), advice ? advice :
-                "Web sites go offline for a few seconds while the WWW service restarts.");
-            keybar(si->installed ? "ENTER=Install   U=Uninstall   ESC=Quit" : "ENTER=Install   ESC=Quit");
-            k = key();
-            if (k == 27) return 'q';
-            if (k == 13) return 'i';
+        put(STEP_X, MSG_ROW, A_BRIGHT, v);
+        put(STEP_X, MSG_ROW + 1, ON_BLUE(C_YELLOW),
+            "Web sites go offline for a few seconds while the WWW service restarts.");
+        if (advice && !remove) put(STEP_X, MSG_ROW + 2, ON_BLUE(C_YELLOW), advice);
+
+        if (remove) wsprintfA(keys, "ENTER=Uninstall   %s", quit);
+        else if (si->installed) wsprintfA(keys, "ENTER=Install   U=Uninstall   %s", quit);
+        else wsprintfA(keys, "ENTER=Install   %s", quit);
+        keybar(keys);
+        k = key();
+        if (k == 27 || k == 3) return 'q';
+        if (k == 13) {
+            if (!remove) return 'i';
+            k = 'u';
         }
         if (k == 'u' && si->installed) {
-            clear_rows(22, 23);
-            put(STEP_X, 22, A_BRIGHT, "Also delete every web site's URL Magic settings?");
-            put(STEP_X, 23, A_TEXT, "Keep them if you might install urlmagic again.");
-            keybar("Y=Delete settings   N=Keep settings   ESC=Back");
+            clear_rows(MSG_ROW, SCR_H - 2);
+            put(STEP_X, MSG_ROW, A_BRIGHT, "Also delete every web site's URL Magic settings?");
+            put(STEP_X, MSG_ROW + 1, A_TEXT, "Keep them if you might install urlmagic again.");
+            keybar("Y=Delete settings   N=Keep settings   ESC=Back   CTRL+C=Quit");
             for (;;) {
                 k = key();
                 if (k == 'y' || k == 'n') { *purge = k == 'y'; return 'u'; }
+                if (k == 3) return 'q';
                 if (k == 27) break;
             }
         }
@@ -1348,7 +1346,7 @@ static void tui_result(BOOL installing, BOOL purge, const WCHAR *dir)
         put(STEP_X, y++, ON_BLUE(C_GREEN), "\xFE urlmagic is removed. Poof!");
     }
     y++;
-    for (i = 0; i < g_nmsgs && y < SCR_H - 2; i++) put(STEP_X + 2, y++, ON_BLUE(g_msg_fg[i]), g_msgs[i]);
+    for (i = 0; i < g_nmsgs && y < SCR_H - 3; i++) put(STEP_X + 2, y++, ON_BLUE(g_msg_fg[i]), g_msgs[i]);
     if (!g_errors && installing) {
         put(STEP_X, y, A_BRIGHT, "1.");
         put(STEP_X + 3, y++, A_TEXT, "Internet Service Manager > a web site's Properties > URL Magic.");
@@ -1359,12 +1357,12 @@ static void tui_result(BOOL installing, BOOL purge, const WCHAR *dir)
         put(STEP_X + 6, y++, ON_BLUE(C_CYAN), "RewriteRule ^old-page$ /new-page [R=301,L]");
         WideCharToMultiByte(CP_OEMCP, 0, dir, -1, d, MAX_PATH, NULL, NULL);
         wsprintfA(line, "Rule problems are logged to %s\\urlmagic4.log", d);
-        put(STEP_X, SCR_H - 3, A_TEXT, line);
+        put(STEP_X, SCR_H - 4, A_TEXT, line);   /* two blank rows above the key bar */
     } else if (!g_errors && !purge) {
         put(STEP_X, y++, A_TEXT, "Each web site's URL Magic settings were kept, in case you reinstall.");
     }
     keybar("ENTER=Close");
-    while ((i = key()) != 13 && i != 27) ;
+    while ((i = key()) != 13 && i != 27 && i != 3) ;
 }
 
 static int tui_main(BOOL remove)
