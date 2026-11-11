@@ -73,6 +73,39 @@ static BOOL guid_eq(REFIID a, const IID *b)
 static void *mem_alloc(SIZE_T n) { return HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, n); }
 static void mem_free(void *p) { if (p) HeapFree(GetProcessHeap(), 0, p); }
 
+/* Append a line to umtab.log next to the DLL (ANSI, so NT4 Notepad opens it). */
+static void ulog(const WCHAR *msg)
+{
+    WCHAR path[MAX_PATH];
+    char line[1024];
+    int n, i;
+    DWORD w;
+    HANDLE f;
+
+    n = (int)GetModuleFileNameW(g_hinst, path, MAX_PATH);
+    for (i = n; i > 0 && path[i - 1] != L'\\'; i--) ;
+    lstrcpynW(path + i, L"umtab.log", MAX_PATH - i);
+    f = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) return;
+    SetFilePointer(f, 0, NULL, FILE_END);
+    n = WideCharToMultiByte(CP_ACP, 0, msg, -1, line, sizeof line - 3, NULL, NULL);
+    if (n > 0) {
+        n--;                                   /* drop the terminating NUL */
+        line[n++] = '\r';
+        line[n++] = '\n';
+        WriteFile(f, line, (DWORD)n, &w, NULL);
+    }
+    CloseHandle(f);
+}
+
+static void ulog_guid(const WCHAR *what, const GUID *g)
+{
+    WCHAR s[40], line[120];
+    StringFromGUID2((REFGUID)g, s, 40);
+    wsprintfW(line, L"%s %s", what, s);
+    ulog(line);
+}
+
 /* growable wide-string buffer */
 typedef struct { WCHAR *s; int len, cap; } wbuf;
 
@@ -267,6 +300,7 @@ static HRESULT WINAPI tab_qi(IExtendPropertySheet *This, REFIID riid, void **ppv
         IExtendPropertySheet_AddRef(This);
         return S_OK;
     }
+    ulog_guid(L"tab: QueryInterface for unsupported", riid);
     *ppv = NULL;
     return E_NOINTERFACE;
 }
@@ -295,8 +329,18 @@ static HRESULT WINAPI tab_create_pages(IExtendPropertySheet *This, LPPROPERTYSHE
     WCHAR *info;
     (void)This; (void)handle;
 
+    ulog(L"tab: CreatePropertyPages called");
     info = probe(dobj);
     if (!info) return E_OUTOFMEMORY;
+    {
+        /* the log line buffer is 1 KB; write the probe output in pieces */
+        WCHAR piece[400];
+        int i, len = lstrlenW(info);
+        for (i = 0; i < len; i += 399) {
+            lstrcpynW(piece, info + i, 400);
+            ulog(piece);
+        }
+    }
 
     memset(&psp, 0, sizeof psp);
     psp.dwSize = PROPSHEETPAGEW_V1_SIZE;   /* NT 4.0 comctl32 only knows the v1 layout */
@@ -309,14 +353,21 @@ static HRESULT WINAPI tab_create_pages(IExtendPropertySheet *This, LPPROPERTYSHE
     psp.lParam = (LPARAM)info;
 
     page = CreatePropertySheetPageW(&psp);
-    if (!page) { mem_free(info); return E_FAIL; }
+    if (!page) { ulog(L"tab: CreatePropertySheetPage FAILED"); mem_free(info); return E_FAIL; }
     InterlockedIncrement(&g_locks);   /* released in page_cb */
-    return IPropertySheetCallback_AddPage(cb, page);
+    {
+        HRESULT hr = IPropertySheetCallback_AddPage(cb, page);
+        WCHAR line[80];
+        wsprintfW(line, L"tab: AddPage returned 0x%08lX", (unsigned long)hr);
+        ulog(line);
+        return hr;
+    }
 }
 
 static HRESULT WINAPI tab_query_pages(IExtendPropertySheet *This, LPDATAOBJECT dobj)
 {
     (void)This; (void)dobj;
+    ulog(L"tab: QueryPagesFor called");
     return S_OK;
 }
 
@@ -345,6 +396,7 @@ static HRESULT WINAPI cf_create(IClassFactory *This, IUnknown *outer, REFIID rii
     HRESULT hr;
     (void)This;
     *ppv = NULL;
+    ulog_guid(L"factory: CreateInstance for", riid);
     if (outer) return CLASS_E_NOAGGREGATION;
     t = mem_alloc(sizeof *t);
     if (!t) return E_OUTOFMEMORY;
@@ -370,6 +422,7 @@ static IClassFactory g_factory = { &cf_vtbl };
 
 HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID riid, void **ppv)
 {
+    ulog_guid(L"DllGetClassObject for", clsid);
     if (!guid_eq(clsid, &CLSID_UmTab)) { *ppv = NULL; return CLASS_E_CLASSNOTAVAILABLE; }
     return cf_qi(&g_factory, riid, ppv);
 }
@@ -522,8 +575,12 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID reserved)
 {
     (void)reserved;
     if (reason == DLL_PROCESS_ATTACH) {
+        WCHAR exe[MAX_PATH], line[MAX_PATH + 40];
         g_hinst = h;
         DisableThreadLibraryCalls(h);
+        GetModuleFileNameW(NULL, exe, MAX_PATH);
+        wsprintfW(line, L"--- loaded into %s", exe);
+        ulog(line);
     }
     return TRUE;
 }
