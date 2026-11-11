@@ -5,8 +5,13 @@
  * For every request, before IIS maps the URL to a file:
  *   1. refuse requests for rule files (httpd.htaccess, .htaccess, httpd.ini, ...) with 403;
  *   2. look up the site's settings (written by the URL Magic tab, ../common/settings.h);
- *   3. load its rules file (cached; reloaded when the file changes);
+ *   3. take its cached rules;
  *   4. run the rewrite engine and rewrite the URL, redirect, or refuse.
+ *
+ * Requests never wait on the disk: a background thread watches each site's settings, home
+ * directory and rules file and swaps in a new snapshot when one changes. Only a site's very
+ * first request loads it. Each IIS thread keeps its own engine scratch, so a request
+ * normally allocates no memory at all.
  *
  * Problems with rules files go to urlmagic4.log next to this DLL.
  */
@@ -111,8 +116,20 @@ typedef struct {
     LONG refs;
 } rules_ref;
 
+/* Everything a request needs from its site, replaced as a whole when anything changes. */
+typedef struct {
+    LONG refs;
+    BOOL enabled, debug;
+    rules_ref *rules;               /* NULL = no rules */
+    char home_a[MAX_PATH];          /* site home directory, ANSI, no trailing backslash */
+} snap;
+
+/* Requests only touch id and cur (under g_lock). The rest belongs to whoever refreshes the
+   site: the request that adds it (under g_lock, before anyone else can see it), then only
+   the refresh thread. */
 typedef struct {
     DWORD id;                       /* 0 = free slot */
+    snap *cur;
     um_site cfg;
     DWORD cfg_at;
     WCHAR home[MAX_PATH];           /* site home directory from the metabase */
@@ -127,12 +144,22 @@ typedef struct {
 } site;
 
 static site g_sites[MAX_SITES];
+static HANDLE g_thread, g_stop;
+static DWORD g_tls = TLS_OUT_OF_INDEXES;
 
 static void ref_release(rules_ref *rr)
 {
     if (rr && InterlockedDecrement(&rr->refs) == 0) {
         um_rules_free(rr->r);
         HeapFree(GetProcessHeap(), 0, rr);
+    }
+}
+
+static void snap_release(snap *sn)
+{
+    if (sn && InterlockedDecrement(&sn->refs) == 0) {
+        ref_release(sn->rules);
+        HeapFree(GetProcessHeap(), 0, sn);
     }
 }
 
@@ -197,7 +224,7 @@ static BOOL wants_httpdini(const site *s, const WCHAR *path)
     return n >= 9 && lstrcmpiW(path + n - 9, L"httpd.ini") == 0;
 }
 
-/* (Re)load the rules file if it changed. Called with g_lock held. */
+/* (Re)load the rules file if it changed. */
 static void refresh_rules(site *s, const WCHAR *path)
 {
     WIN32_FILE_ATTRIBUTE_DATA fa;
@@ -209,7 +236,6 @@ static void refresh_rules(site *s, const WCHAR *path)
     rules_ref *nr = NULL;
     parse_ctx pc;
 
-    s->rules_at = GetTickCount();
     if (same) return;
 
     WideCharToMultiByte(CP_ACP, 0, path, -1, pc.file, MAX_PATH, NULL, NULL);
@@ -256,44 +282,22 @@ static void refresh_rules(site *s, const WCHAR *path)
     s->rules = nr;
 }
 
-/* Find the site's rules (with a reference the caller must release), or NULL. */
-static rules_ref *site_rules(DWORD id, char *home_a, size_t home_cap, BOOL *debug)
+/* Bring s up to date as its timers fall due: settings, home directory, rules file. */
+static void refresh_site(site *s)
 {
-    site *s = NULL;
-    rules_ref *out = NULL;
-    int i;
-
-    home_a[0] = 0;
-    *debug = FALSE;
-    EnterCriticalSection(&g_lock);
-    for (i = 0; i < MAX_SITES; i++)
-        if (g_sites[i].id == id) { s = &g_sites[i]; break; }
-    if (!s) {
-        for (i = 0; i < MAX_SITES; i++)
-            if (g_sites[i].id == 0) {
-                s = &g_sites[i];
-                memset(s, 0, sizeof *s);
-                s->id = id;
-                s->cfg_at = s->home_at = s->rules_at = GetTickCount() - HOME_EVERY - 1;
-                break;
-            }
-    }
-    if (!s) goto out;
+    BOOL rules_due = tick_since(s->rules_at) > RULES_EVERY;
 
     if (tick_since(s->cfg_at) > SETTINGS_EVERY) {
-        um_site_read(HKEY_LOCAL_MACHINE, L"W3SVC", id, &s->cfg);
+        um_site_read(HKEY_LOCAL_MACHINE, L"W3SVC", s->id, &s->cfg);
         s->cfg_at = GetTickCount();
-        s->rules_at -= RULES_EVERY + 1;              /* settings may point elsewhere now */
+        rules_due = TRUE;                       /* settings may point elsewhere now */
     }
-    *debug = s->cfg.enabled && s->cfg.debug;
-    if (!s->cfg.enabled) goto out;
+    if (!s->cfg.enabled) return;
     if (tick_since(s->home_at) > HOME_EVERY) {
         read_home(s);
         s->home_at = GetTickCount();
     }
-    cpy(home_a, s->home_a, home_cap);
-
-    if (tick_since(s->rules_at) > RULES_EVERY) {
+    if (rules_due) {
         WCHAR path[MAX_PATH];
         if (s->cfg.source == UM_SRC_FILE) {
             lstrcpynW(path, s->cfg.rules_file, MAX_PATH);
@@ -316,14 +320,96 @@ static rules_ref *site_rules(DWORD id, char *home_a, size_t home_cap, BOOL *debu
             path[0] = 0;
         }
         if (path[0]) refresh_rules(s, path);
+        s->rules_at = GetTickCount();
     }
-    if (s->rules) {
-        out = s->rules;
+}
+
+/* A new snapshot of s if it differs from what requests use now, else NULL. */
+static snap *new_snap(site *s)
+{
+    snap *n, *c = s->cur;
+    BOOL enabled = s->cfg.enabled != 0, debug = s->cfg.enabled && s->cfg.debug;
+    if (c && c->enabled == enabled && c->debug == debug && c->rules == s->rules &&
+        lstrcmpA(c->home_a, s->home_a) == 0)
+        return NULL;
+    if (!(n = HeapAlloc(GetProcessHeap(), 0, sizeof *n))) return NULL;
+    n->refs = 1;
+    n->enabled = enabled;
+    n->debug = debug;
+    n->rules = s->rules;
+    if (n->rules) InterlockedIncrement(&n->rules->refs);
+    lstrcpynA(n->home_a, s->home_a, MAX_PATH);
+    return n;
+}
+
+/* The site's current snapshot, with a reference the caller must release; NULL if there are
+   too many sites. A site's first request loads it. */
+static snap *site_snap(DWORD id)
+{
+    site *s = NULL, *free_slot = NULL;
+    snap *out = NULL;
+    int i;
+
+    EnterCriticalSection(&g_lock);
+    for (i = 0; i < MAX_SITES; i++) {
+        if (g_sites[i].id == id) { s = &g_sites[i]; break; }
+        if (!free_slot && !g_sites[i].id) free_slot = &g_sites[i];
+    }
+    if (!s && free_slot) {
+        s = free_slot;
+        memset(s, 0, sizeof *s);
+        s->id = id;
+        s->cfg_at = s->home_at = s->rules_at = GetTickCount() - HOME_EVERY - 1;
+        refresh_site(s);
+        s->cur = new_snap(s);
+    }
+    if (s && s->cur) {
+        out = s->cur;
         InterlockedIncrement(&out->refs);
     }
-out:
     LeaveCriticalSection(&g_lock);
     return out;
+}
+
+/* The refresh thread: every second, bring every known site up to date. */
+static DWORD WINAPI refresher(LPVOID unused)
+{
+    HRESULT init = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+    (void)unused;
+    while (WaitForSingleObject(g_stop, 1000) == WAIT_TIMEOUT) {
+        int i;
+        for (i = 0; i < MAX_SITES; i++) {
+            site *s = &g_sites[i];
+            snap *n, *old = NULL;
+            DWORD id;
+            EnterCriticalSection(&g_lock);
+            id = s->id;
+            LeaveCriticalSection(&g_lock);
+            if (!id) continue;
+            refresh_site(s);                    /* the slow part, without the lock */
+            if (!(n = new_snap(s))) continue;
+            EnterCriticalSection(&g_lock);
+            old = s->cur;
+            s->cur = n;
+            LeaveCriticalSection(&g_lock);
+            snap_release(old);
+        }
+    }
+    if (init == S_OK || init == S_FALSE) CoUninitialize();
+    return 0;
+}
+
+/* this thread's engine scratch (made on first use, freed when the thread ends) */
+static um_scratch *thread_scratch(void)
+{
+    um_scratch *sc;
+    if (g_tls == TLS_OUT_OF_INDEXES) return NULL;
+    sc = TlsGetValue(g_tls);
+    if (!sc) {
+        sc = um_scratch_new();
+        if (sc) TlsSetValue(g_tls, sc);
+    }
+    return sc;
 }
 
 /* ---------------------------------------------------------------- request environment */
@@ -400,25 +486,36 @@ static int env_file_type(void *ctx, const char *fspath)
 
 /* ---------------------------------------------------------------- responses */
 
-static DWORD respond(HTTP_FILTER_CONTEXT *pfc, const char *status, const char *location)
+/* Send a whole small response in one piece (headers and body together: two small sends can
+   stall on Nagle + delayed ACK). GET and HEAD over HTTP/1.1 keep the connection open, so a
+   proxy in front can reuse it. */
+static DWORD respond(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr,
+                     const char *status, const char *location)
 {
-    char headers[URL_CAP + 200], body[300];
+    char buf[URL_CAP + 700], body[300], method[16], version[16];
     DWORD n;
+    BOOL head, keep;
+
+    n = sizeof method;
+    if (!hdr->GetHeader(pfc, "method", method, &n)) method[0] = 0;
+    n = sizeof version;
+    if (!hdr->GetHeader(pfc, "version", version, &n)) version[0] = 0;
+    head = ieq(method, "HEAD");
+    keep = (head || ieq(method, "GET")) && ieq(version, "HTTP/1.1");
 
     wsprintfA(body, "<html><head><title>%s</title></head><body><h1>%s</h1></body></html>", status, status);
-    headers[0] = 0;
+    buf[0] = 0;
     if (location) {
-        cpy(headers, "Location: ", sizeof headers);
-        cat(headers, location, sizeof headers);
-        cat(headers, "\r\n", sizeof headers);
+        cpy(buf, "Location: ", sizeof buf);
+        cat(buf, location, URL_CAP + 20);
+        cat(buf, "\r\n", sizeof buf);
     }
-    wsprintfA(headers + strlen(headers), "Content-Type: text/html\r\nContent-Length: %u\r\n\r\n",
-              (unsigned)strlen(body));
-    pfc->ServerSupportFunction(pfc, SF_REQ_SEND_RESPONSE_HEADER, (PVOID)status,
-                               (ULONG_PTR)headers, 0);
-    n = (DWORD)strlen(body);
-    pfc->WriteClient(pfc, body, &n, 0);
-    return SF_STATUS_REQ_FINISHED;
+    n = (DWORD)strlen(buf);
+    wsprintfA(buf + n, "Content-Type: text/html\r\nContent-Length: %u\r\n%s\r\n",
+              (unsigned)strlen(body), keep ? "" : "Connection: close\r\n");
+    if (!head) cat(buf, body, sizeof buf);
+    pfc->ServerSupportFunction(pfc, SF_REQ_SEND_RESPONSE_HEADER, (PVOID)status, (ULONG_PTR)buf, 0);
+    return keep ? SF_STATUS_REQ_FINISHED_KEEP_CONN : SF_STATUS_REQ_FINISHED;
 }
 
 static const char *redirect_status(int code)
@@ -511,6 +608,12 @@ BOOL WINAPI GetFilterVersion(HTTP_FILTER_VERSION *ver)
                    SF_NOTIFY_PREPROC_HEADERS;
     log_line("urlmagic4 " UM_VERSION_STR " loaded");
     log_sites();
+    if (!g_thread) {
+        DWORD tid;
+        g_stop = CreateEventW(NULL, TRUE, FALSE, NULL);
+        if (g_stop) g_thread = CreateThread(NULL, 0, refresher, NULL, 0, &tid);
+        if (!g_thread) log_line("couldn't start the refresh thread: rules files won't be reloaded");
+    }
     return TRUE;
 }
 
@@ -549,46 +652,53 @@ static void debug_line(request *rq, DWORD id, const um_result *res, LONGLONG tic
 
 static DWORD preproc(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr)
 {
-    char url[URL_CAP], idbuf[16], home[MAX_PATH];
+    char url[URL_CAP], idbuf[16];
     DWORD n = sizeof url, id = 0;
-    rules_ref *rr;
+    snap *sn;
+    um_scratch *sc;
     request rq;
     um_env env;
     um_result res;
     const char *p;
     DWORD ret = SF_STATUS_REQ_NEXT_NOTIFICATION;
-    BOOL debug;
     LARGE_INTEGER t0, t1, freq;
 
     if (!hdr->GetHeader(pfc, "url", url, &n)) return ret;
-    if (is_rules_file(url)) return respond(pfc, "403 Forbidden", NULL);
+    if (is_rules_file(url)) return respond(pfc, hdr, "403 Forbidden", NULL);
 
     n = sizeof idbuf;
     if (!pfc->GetServerVariable(pfc, "INSTANCE_ID", idbuf, &n)) return ret;
     for (p = idbuf; *p >= '0' && *p <= '9'; p++) id = id * 10 + (DWORD)(*p - '0');
     if (!id) return ret;
 
-    rr = site_rules(id, home, sizeof home, &debug);
-    if (!rr) {
-        if (debug) {
+    sn = site_snap(id);
+    if (!sn) return ret;
+    if (!sn->enabled || !sn->rules) {
+        if (sn->debug) {
             char m[URL_CAP + 80];
-            wsprintfA(m, "site %lu debug: %s -> no rules loaded (see the lines above)", (unsigned long)id, url);
+            wsprintfA(m, "site %lu debug: ", (unsigned long)id);
+            cat(m, url, sizeof m);
+            cat(m, " -> no rules loaded (see the lines above)", sizeof m);
             log_line(m);
         }
+        snap_release(sn);
         return ret;
     }
 
     rq.pfc = pfc;
     rq.hdr = hdr;
-    rq.home = home;
+    rq.home = sn->home_a;
     rq.url = url;
     env.ctx = &rq;
     env.var = env_var;
     env.file_type = env_file_type;
 
-    if (debug) QueryPerformanceCounter(&t0);
-    um_apply(rr->r, url, &env, &res);
-    if (debug) {
+    t0.QuadPart = 0;
+    if (sn->debug) QueryPerformanceCounter(&t0);
+    sc = thread_scratch();
+    if (sc) um_apply_s(sn->rules->r, url, &env, sc, &res);
+    else um_apply(sn->rules->r, url, &env, &res);
+    if (sn->debug) {
         QueryPerformanceCounter(&t1);
         debug_line(&rq, id, &res, t1.QuadPart - t0.QuadPart,
                    QueryPerformanceFrequency(&freq) ? freq.QuadPart : 0);
@@ -597,20 +707,22 @@ static DWORD preproc(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr)
     case UM_REWRITE:
         if (!hdr->SetHeader(pfc, "url", res.url)) log_line("couldn't set the rewritten URL");
         break;
-    case UM_REDIRECT:  ret = respond(pfc, redirect_status(res.status), res.url); break;
-    case UM_FORBIDDEN: ret = respond(pfc, "403 Forbidden", NULL); break;
-    case UM_GONE:      ret = respond(pfc, "410 Gone", NULL); break;
+    case UM_REDIRECT:  ret = respond(pfc, hdr, redirect_status(res.status), res.url); break;
+    case UM_FORBIDDEN: ret = respond(pfc, hdr, "403 Forbidden", NULL); break;
+    case UM_GONE:      ret = respond(pfc, hdr, "410 Gone", NULL); break;
     case UM_FAIL: {
         char m[URL_CAP + 80];
-        wsprintfA(m, "site %lu: rules failed for %s (regex too complex?)", (unsigned long)id, url);
+        wsprintfA(m, "site %lu: rules failed for ", (unsigned long)id);
+        cat(m, url, sizeof m);
+        cat(m, " (regex too complex?)", sizeof m);
         log_line(m);
-        ret = respond(pfc, "500 Internal Server Error", NULL);
+        ret = respond(pfc, hdr, "500 Internal Server Error", NULL);
         break;
     }
     default: break;
     }
-    um_result_free(&res);
-    ref_release(rr);
+    if (!sc) um_result_free(&res);
+    snap_release(sn);
     return ret;
 }
 
@@ -625,9 +737,20 @@ BOOL WINAPI TerminateFilter(DWORD flags)
 {
     int i;
     (void)flags;
+    if (g_thread) {
+        /* no timeout: the sites must outlive the thread (a dead share can hold a check up
+           until SMB gives up) */
+        SetEvent(g_stop);
+        WaitForSingleObject(g_thread, INFINITE);
+        CloseHandle(g_thread);
+        g_thread = NULL;
+    }
+    if (g_stop) { CloseHandle(g_stop); g_stop = NULL; }
     EnterCriticalSection(&g_lock);
     for (i = 0; i < MAX_SITES; i++) {
+        snap_release(g_sites[i].cur);
         ref_release(g_sites[i].rules);
+        g_sites[i].cur = NULL;
         g_sites[i].rules = NULL;
         g_sites[i].id = 0;
     }
@@ -642,15 +765,23 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID reserved)
     if (reason == DLL_PROCESS_ATTACH) {
         int i;
         g_hinst = h;
-        DisableThreadLibraryCalls(h);
+        g_tls = TlsAlloc();
         InitializeCriticalSection(&g_lock);
         InitializeCriticalSection(&g_loglock);
         i = (int)GetModuleFileNameW(h, g_logpath, MAX_PATH);
         while (i > 0 && g_logpath[i - 1] != L'\\') i--;
         lstrcpynW(g_logpath + i, L"urlmagic4.log", MAX_PATH - i);
-    } else if (reason == DLL_PROCESS_DETACH) {
-        DeleteCriticalSection(&g_lock);
-        DeleteCriticalSection(&g_loglock);
+    } else if (reason == DLL_THREAD_DETACH || reason == DLL_PROCESS_DETACH) {
+        /* free this thread's scratch (IIS ends idle pool threads) */
+        if (g_tls != TLS_OUT_OF_INDEXES) {
+            um_scratch_free(TlsGetValue(g_tls));
+            TlsSetValue(g_tls, NULL);
+        }
+        if (reason == DLL_PROCESS_DETACH) {
+            if (g_tls != TLS_OUT_OF_INDEXES) TlsFree(g_tls);
+            DeleteCriticalSection(&g_lock);
+            DeleteCriticalSection(&g_loglock);
+        }
     }
     return TRUE;
 }
