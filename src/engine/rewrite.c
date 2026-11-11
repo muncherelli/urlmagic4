@@ -287,7 +287,16 @@ static tmpl *tmpl_compile(const char *t)
     return o;
 }
 
-/* Fill f if pat can be matched without PCRE2 (see fastpat); leaves f->kind FP_NONE if not. */
+/* Fill f if pat can be matched without PCRE2 (see fastpat); leaves f->kind FP_NONE if not.
+   Built with UM_NO_FASTPATH (a test build), no pattern takes the fast path. */
+#ifdef UM_NO_FASTPATH
+static void analyze(const char *pat, int nocase, fastpat *f)
+{
+    (void)pat;
+    memset(f, 0, sizeof *f);
+    f->nocase = nocase;
+}
+#else
 static void analyze(const char *pat, int nocase, fastpat *f)
 {
     size_t n = strlen(pat), i, j = 0;
@@ -329,6 +338,7 @@ static void analyze(const char *pat, int nocase, fastpat *f)
     f->lit = lit;
     f->len = j;
 }
+#endif
 
 /* ---------------------------------------------------------------- tokenizer */
 
@@ -783,7 +793,7 @@ static void a_rollback(um_scratch *a, amark m)
     if (a->extra == m.extra && !a->oom) { a->cur = m.cur; a->left = m.left; }
 }
 
-/* %XX -> byte (the whole string; "+" stays "+") */
+/* %XX -> byte ("+" stays "+"); a %00 ends the string, so the rules never see past it */
 static char *url_decode(um_scratch *a, const char *s, size_t n, size_t *len)
 {
     abuf b;
@@ -797,7 +807,9 @@ static char *url_decode(um_scratch *a, const char *s, size_t n, size_t *len)
             l = hexval((unsigned char)s[i + 2]);
         }
         if (h >= 0 && l >= 0) {
-            b.s[b.len++] = (char)(h * 16 + l);
+            char ch = (char)(h * 16 + l);
+            if (!ch) break;
+            b.s[b.len++] = ch;
             i += 2;
         } else {
             b.s[b.len++] = s[i];
@@ -907,11 +919,7 @@ static int fast_match(const fastpat *f, const char *s, size_t len, caps *c)
 static int run(state *st, pcre2_code *re, const fastpat *fp, const char *s, size_t len, int nl, caps *c)
 {
     pcre2_match_data *md = st->a->md;
-    if (fp && fp->kind != FP_NONE && !(nl < 0 ? memchr(s, '\n', len) != NULL : nl)
-#ifdef UM_NO_FASTPATH
-        && 0
-#endif
-       )
+    if (fp && fp->kind != FP_NONE && !(nl < 0 ? memchr(s, '\n', len) != NULL : nl))
         return fast_match(fp, s, len, c);
     int rc = pcre2_match(re, (PCRE2_SPTR)s, len, 0, 0, md, NULL);
     PCRE2_SIZE *ov;
@@ -1069,9 +1077,8 @@ int um_apply_s(const um_rules *r, const char *url, const um_env *env, um_scratch
     st.env = env;
     st.a = a;
     st.query = q ? q + 1 : "";
-    st.path = url_decode(a, url, plen, NULL);
+    st.path = url_decode(a, url, plen, &st.plen);
     if (!st.path) { st.failed = 1; goto done; }
-    st.plen = strlen(st.path);  /* a %00 ends the path, for the regexes too */
     st.path_nl = memchr(st.path, '\n', st.plen) != NULL;
     st.orig_path = st.path;     /* path is replaced, never changed, so this stays put */
 
