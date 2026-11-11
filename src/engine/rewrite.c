@@ -287,7 +287,16 @@ static tmpl *tmpl_compile(const char *t)
     return o;
 }
 
-/* Fill f if pat can be matched without PCRE2 (see fastpat); leaves f->kind FP_NONE if not. */
+/* Fill f if pat can be matched without PCRE2 (see fastpat); leaves f->kind FP_NONE if not.
+   Built with UM_NO_FASTPATH (a test build), no pattern takes the fast path. */
+#ifdef UM_NO_FASTPATH
+static void analyze(const char *pat, int nocase, fastpat *f)
+{
+    (void)pat;
+    memset(f, 0, sizeof *f);
+    f->nocase = nocase;
+}
+#else
 static void analyze(const char *pat, int nocase, fastpat *f)
 {
     size_t n = strlen(pat), i, j = 0;
@@ -329,6 +338,7 @@ static void analyze(const char *pat, int nocase, fastpat *f)
     f->lit = lit;
     f->len = j;
 }
+#endif
 
 /* ---------------------------------------------------------------- tokenizer */
 
@@ -907,11 +917,7 @@ static int fast_match(const fastpat *f, const char *s, size_t len, caps *c)
 static int run(state *st, pcre2_code *re, const fastpat *fp, const char *s, size_t len, int nl, caps *c)
 {
     pcre2_match_data *md = st->a->md;
-    if (fp && fp->kind != FP_NONE && !(nl < 0 ? memchr(s, '\n', len) != NULL : nl)
-#ifdef UM_NO_FASTPATH
-        && 0
-#endif
-       )
+    if (fp && fp->kind != FP_NONE && !(nl < 0 ? memchr(s, '\n', len) != NULL : nl))
         return fast_match(fp, s, len, c);
     int rc = pcre2_match(re, (PCRE2_SPTR)s, len, 0, 0, md, NULL);
     PCRE2_SIZE *ov;
