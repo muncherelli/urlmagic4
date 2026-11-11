@@ -578,7 +578,7 @@ static void log_sites(void)
     int count = 0;
 
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UM_REG_SITES, 0, KEY_READ, &root) != ERROR_SUCCESS) {
-        log_line("no site has URL Magic settings yet: sites use the defaults");
+        log_line("no site has URL Magic turned on yet");
         return;
     }
     for (i = 0; n = 32, RegEnumKeyExW(root, i, service, &n, NULL, NULL, NULL, NULL) == ERROR_SUCCESS; i++) {
@@ -600,12 +600,12 @@ static void log_sites(void)
                       cfg.enabled ? "on" : "off", fmts[cfg.format <= 2 ? cfg.format : 0], file,
                       cfg.debug ? ", debug on" : "");
             log_line(m);
-            count++;
+            if (cfg.enabled) count++;
         }
         RegCloseKey(svc);
     }
     RegCloseKey(root);
-    if (!count) log_line("no site has URL Magic settings yet: sites use the defaults");
+    if (!count) log_line("no site has URL Magic turned on yet");
 }
 
 BOOL WINAPI GetFilterVersion(HTTP_FILTER_VERSION *ver)

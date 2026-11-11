@@ -7,14 +7,14 @@
  * web sites) and the site's number on that service, so any number of sites, and other IIS
  * services, each get their own key. Every server keeps its own settings in its own registry
  * (the tab writes to the registry of whichever server Internet Service Manager is managing).
- *     Enabled    REG_DWORD  1 = rewrite this site (default 1)
+ *     Enabled    REG_DWORD  1 = rewrite this site (default 0: off)
  *     Format     REG_SZ     "auto" | "htaccess" | "httpd.ini"           (default "auto")
  *     Source     REG_SZ     "docroot" | "file"                          (default "docroot")
  *     RulesFile  REG_SZ     full path of the rules file when Source = "file"
  *     Debug      REG_DWORD  1 = log every request with timing to urlmagic4.log (default 0)
  *
- * A site without a key uses the defaults: rules from .htaccess or httpd.ini in its home
- * directory, format picked by file name.
+ * A site without a key is off: URL Magic leaves it alone (no file checks at all) until
+ * rewriting is turned on in the site's URL Magic tab.
  */
 #ifndef URLMAGIC4_SETTINGS_H
 #define URLMAGIC4_SETTINGS_H
