@@ -38,11 +38,13 @@ Requirements: Windows NT 4.0 (SP6a recommended) with IIS 4.0, any 486 or later C
 1. Download the installer, e.g. `urlmagic4.0.0.exe`, from the
    [releases](https://github.com/muncherelli/urlmagic4/releases) and copy it to the server.
    It's a single file: both DLLs and the docs are inside it.
-2. Close Internet Service Manager and double-click it. It checks for Windows NT 4.0 and
-   IIS 4.0, asks before changing anything, and shows each step:  stop the WWW service, unpack
+2. Close Internet Service Manager and double-click it. Setup opens full-screen, in the style
+   of NT's own text-mode Setup: it checks Windows NT (version, build, service pack), IIS and
+   administrator rights, then installs with a progress bar: stop the WWW service, unpack
    everything (and a copy of itself) to `%SystemDrive%\urlmagic4`, register the URL Magic tab,
-   add urlmagic4 to IIS's ISAPI filters, start the WWW service. Run it again later to upgrade
-   or uninstall. From a command prompt: `urlmagic4.0.0 install [folder]`.
+   add urlmagic4 to IIS's ISAPI filters, start the WWW service. It also appears in
+   **Control Panel → Add/Remove Programs**. From a command prompt (no prompts, for scripts):
+   `urlmagic4.0.0 install [folder]`.
 3. Open **Internet Service Manager** → a web site's **Properties** → **URL Magic**. If the tab
    isn't there, enable it once: **Console → Add/Remove Snap-in → Extensions**, choose
    *Internet Information Server*, tick **URL Magic**, OK, then **Console → Save**.
@@ -53,8 +55,9 @@ Each web site's **Properties → URL Magic** tab turns rewriting on or off and c
 rules format and file. Settings live in `HKLM\SOFTWARE\urlmagic4\Sites\W3SVC\<site number>`.
 Problems in rules files are written to `urlmagic4.log` in the install folder.
 
-**Uninstall:** run the installer again and choose *Uninstall*, or
-`C:\urlmagic4\urlmagic4.0.0 uninstall` (keeps each site's settings; add `/purge` to remove those too).
+**Uninstall:** Control Panel → Add/Remove Programs → *URL Magic*, or run the installer again
+and press **U**. It asks whether to delete every site's URL Magic settings too. From a command
+prompt: `C:\urlmagic4\urlmagic4.0.0 uninstall` (add `/purge` to delete the settings).
 
 **Sites whose home directory is a network share:** IIS runs filters as LocalSystem, which
 can't read network shares. Keep that site's rules file on the server's own disk and choose it

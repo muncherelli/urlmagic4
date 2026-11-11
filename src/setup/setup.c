@@ -93,7 +93,7 @@ static void ui_init(void)
     DWORD mode;
     g_color = GetConsoleMode(g_out, &mode) && GetConsoleScreenBufferInfo(g_out, &ci);
     if (g_color) g_attr0 = ci.wAttributes;
-    SetConsoleTitleA("urlmagic " UM_VERSION_STR " setup");
+    SetConsoleTitleA("URL Magic " UM_VERSION_STR " Install/Uninstall");
     {
         /* the console window's own icon: undocumented, so only if kernel32 has it */
         typedef BOOL (WINAPI *seticon_fn)(HICON);
@@ -120,7 +120,8 @@ static const char *LOGO_FONT[][5] = {
 /* glyph index, or -1 for a word gap */
 static const int LOGO_TEXT[] = { 0, 1, 2, -1, 3, 4, 5, 6, 7 };   /* URL MAGIC; the 4 is in the icon */
 #define LOGO_W 46
-#define BOX_W 68                         /* inside width: 2 + icon 16 + 2 + logo 46 + 2 */
+#define BOX_W 69                         /* inside: 2 + icon 16 + 2 + logo 46 + 3 (the icon's
+                                            first pixel column is empty, so 3 balances it) */
 
 /* the wand icon (same pixel art as res/urlmagic4.ico, tools/make_art.py), drawn with half
    blocks: each character cell shows two pixels, one above the other */
@@ -232,9 +233,211 @@ static void banner(void)
     out("\r\n");
 }
 
+/* ---------------------------------------------------------------- full-screen mode
+ *
+ * Double-clicked, setup has a fresh console of its own: it turns it into an 80 x 25 screen in
+ * the style of NT's own text-mode Setup (blue, with a grey key bar at the bottom) and draws
+ * with WriteConsoleOutput*, which never scrolls.
+ */
+#define SCR_W 80
+#define SCR_H 25
+#define ON_BLUE(fg) ((WORD)(0x10 | (fg)))
+#define A_TEXT   ON_BLUE(C_GREY)
+#define A_BRIGHT ON_BLUE(C_WHITE)
+#define A_KEYBAR ((WORD)0x70)
+#define STEP_X   6
+#define TAG_X    66
+#define BAR_ROW  12
+#define RES_ROW  14
+#define MAX_MSGS 6
+
+static BOOL g_tui;
+static HANDLE g_in;
+static int g_row, g_cur_row = -1, g_total = 1, g_done;
+static char g_msgs[MAX_MSGS][100];
+static WORD g_msg_fg[MAX_MSGS];
+static int g_nmsgs;
+
+static void put(int x, int y, WORD attr, const char *t)
+{
+    COORD c;
+    DWORD n = (DWORD)lstrlenA(t), w;
+    if (!n || y < 0 || y >= SCR_H) return;
+    if (x + (int)n > SCR_W) n = (DWORD)(SCR_W - x);
+    c.X = (SHORT)x;
+    c.Y = (SHORT)y;
+    WriteConsoleOutputCharacterA(g_out, t, n, c, &w);
+    FillConsoleOutputAttribute(g_out, attr, n, c, &w);
+}
+
+static void fill(int x, int y, WORD attr, char ch, int n)
+{
+    COORD c;
+    DWORD w;
+    if (n <= 0) return;
+    c.X = (SHORT)x;
+    c.Y = (SHORT)y;
+    FillConsoleOutputCharacterA(g_out, ch, (DWORD)n, c, &w);
+    FillConsoleOutputAttribute(g_out, attr, (DWORD)n, c, &w);
+}
+
+static void put_center(int y, WORD attr, const char *t) { put((SCR_W - lstrlenA(t)) / 2, y, attr, t); }
+
+static void clear_rows(int y0, int y1)
+{
+    int y;
+    for (y = y0; y <= y1; y++) fill(0, y, A_TEXT, ' ', SCR_W);
+}
+
+static void keybar(const char *keys)
+{
+    fill(0, SCR_H - 1, A_KEYBAR, ' ', SCR_W);
+    put(2, SCR_H - 1, A_KEYBAR, keys);
+}
+
+/* "[ OK ]" etc. */
+static void tui_tag(int x, int y, const char *t, WORD fg)
+{
+    put(x, y, A_TEXT, "[");
+    put(x + 1, y, ON_BLUE(fg), t);
+    put(x + 5, y, A_TEXT, "]");
+}
+
+/* title line + double rule */
+static void tui_frame(void)
+{
+    static const char right[] = "The missing IIS tab";
+    clear_rows(0, SCR_H - 1);
+    put(2, 0, A_BRIGHT, "URL Magic " UM_VERSION_STR " Install/Uninstall");
+    put(SCR_W - 2 - lstrlenA(right), 0, A_TEXT, right);
+    fill(0, 1, ON_BLUE(C_CYAN), (char)0xCD, SCR_W);
+}
+
+static BOOL tui_begin(void)
+{
+    CONSOLE_SCREEN_BUFFER_INFO ci;
+    CONSOLE_CURSOR_INFO cur;
+    SMALL_RECT r;
+    COORD size;
+
+    if (!g_color || !GetConsoleScreenBufferInfo(g_out, &ci)) return FALSE;
+    /* only a console of our own (started by double-click) is still at the top-left */
+    if (ci.dwCursorPosition.X != 0 || ci.dwCursorPosition.Y != 0) return FALSE;
+    r.Left = 0; r.Top = 0; r.Right = SCR_W - 1; r.Bottom = SCR_H - 1;
+    size.X = SCR_W; size.Y = SCR_H;
+    SetConsoleWindowInfo(g_out, TRUE, &r);
+    SetConsoleScreenBufferSize(g_out, size);
+    SetConsoleWindowInfo(g_out, TRUE, &r);
+    if (!GetConsoleScreenBufferInfo(g_out, &ci) || ci.dwSize.X < SCR_W || ci.dwSize.Y < SCR_H ||
+        ci.srWindow.Left != 0 || ci.srWindow.Top != 0 ||
+        ci.srWindow.Right < SCR_W - 1 || ci.srWindow.Bottom < SCR_H - 1)
+        return FALSE;
+    cur.dwSize = 25;
+    cur.bVisible = FALSE;
+    SetConsoleCursorInfo(g_out, &cur);
+    g_in = GetStdHandle(STD_INPUT_HANDLE);
+    SetConsoleMode(g_in, 0);
+    g_tui = TRUE;
+    return TRUE;
+}
+
+/* wait for a key: lowercase letter, 13 = Enter, 27 = Esc or F3 */
+static int key(void)
+{
+    INPUT_RECORD ir;
+    DWORD n;
+    for (;;) {
+        if (!ReadConsoleInputA(g_in, &ir, 1, &n)) return 27;
+        if (ir.EventType == KEY_EVENT && ir.Event.KeyEvent.bKeyDown) {
+            WORD vk = ir.Event.KeyEvent.wVirtualKeyCode;
+            char ch = ir.Event.KeyEvent.uChar.AsciiChar;
+            if (vk == VK_RETURN) return 13;
+            if (vk == VK_ESCAPE || vk == VK_F3) return 27;
+            if (ch >= 'A' && ch <= 'Z') ch = (char)(ch + 32);
+            if (ch > ' ') return ch;
+        }
+    }
+}
+
+/* the wand, 16 x 8 cells; on blue the wand can be its real black */
+static void tui_icon(int x0, int y0)
+{
+    int row, x;
+    for (row = 0; row < 8; row++) {
+        for (x = 0; x < 16; x++) {
+            char top = ICON_ART[row * 2][x], bot = ICON_ART[row * 2 + 1][x];
+            WORD ft = top == 'K' ? 0 : icon_color(top), fb = bot == 'K' ? 0 : icon_color(bot);
+            char ch[2] = { ' ', 0 };
+            WORD a = A_TEXT;
+            if (top == '.' && bot == '.') continue;
+            if (bot == '.') { ch[0] = (char)0xDF; a = ON_BLUE(ft); }
+            else if (top == '.') { ch[0] = (char)0xDC; a = ON_BLUE(fb); }
+            else { ch[0] = (char)0xDF; a = (WORD)(ft | (fb << 4)); }
+            put(x0 + x, y0 + row, a, ch);
+        }
+    }
+}
+
+static void tui_logo(int x0, int y0)
+{
+    int n = (int)(sizeof LOGO_TEXT / sizeof LOGO_TEXT[0]), row, i, j, x;
+    for (row = 0; row < 5; row++) {
+        x = x0;
+        for (i = 0; i < n; i++) {
+            int g = LOGO_TEXT[i];
+            const char *bits;
+            if (g < 0) { x += 2; continue; }
+            bits = LOGO_FONT[g][row];
+            for (j = 0; bits[j]; j++, x++)
+                if (bits[j] == 'X') fill(x, y0 + row, ON_BLUE(g <= 2 ? C_CYAN : C_MAGENTA), (char)0xDB, 1);
+            if (i + 1 < n && LOGO_TEXT[i + 1] >= 0) x++;
+        }
+    }
+}
+
+static void tui_bar(void)
+{
+    const int x0 = 8, width = 58;
+    int filled = g_total ? g_done * width / g_total : 0;
+    char pct[8];
+    if (filled > width) filled = width;
+    put(x0, BAR_ROW, A_TEXT, "[");
+    fill(x0 + 1, BAR_ROW, ON_BLUE(C_CYAN), (char)0xDB, filled);
+    fill(x0 + 1 + filled, BAR_ROW, ON_BLUE(C_DCYAN), (char)0xB0, width - filled);
+    put(x0 + 1 + width, BAR_ROW, A_TEXT, "]");
+    wsprintfA(pct, "%3d%%", g_total ? (g_done * 100 / g_total > 100 ? 100 : g_done * 100 / g_total) : 0);
+    put(x0 + width + 3, BAR_ROW, A_BRIGHT, pct);
+}
+
+/* a message for the result area (full screen) or an indented line (console) */
+static void msg(const char *text, WORD fg)
+{
+    if (g_tui) {
+        if (g_nmsgs < MAX_MSGS) {
+            lstrcpynA(g_msgs[g_nmsgs], text, sizeof g_msgs[0]);
+            g_msg_fg[g_nmsgs++] = fg;
+        }
+        return;
+    }
+    color(fg);
+    out("      ");
+    out(text);
+    color(C_GREY);
+    out("\r\n");
+}
+
 /* "  -- Title ------" */
 static void section(const char *title)
 {
+    if (g_tui) {                         /* start the progress screen */
+        tui_frame();
+        put(STEP_X - 2, 3, A_BRIGHT, title);
+        g_row = 5;
+        g_done = 0;
+        tui_bar();
+        keybar("Please wait...");
+        return;
+    }
     color(C_DCYAN);
     out("  \xC4\xC4 ");
     color(C_WHITE);
@@ -251,6 +454,14 @@ static void section(const char *title)
 /* "  >> What it's doing ........." then a result */
 static void step(const char *what)
 {
+    if (g_tui) {
+        int n = lstrlenA(what);
+        g_cur_row = g_row++;
+        put(STEP_X, g_cur_row, ON_BLUE(C_CYAN), "\xAF");
+        put(STEP_X + 2, g_cur_row, A_TEXT, what);
+        fill(STEP_X + 3 + n, g_cur_row, ON_BLUE(C_DCYAN), (char)0xFA, TAG_X - 1 - (STEP_X + 3 + n));
+        return;
+    }
     color(C_CYAN);
     out("  \xAF ");
     color(C_GREY);
@@ -264,6 +475,13 @@ static void step(const char *what)
 static void spin(void)
 {
     static const char chars[] = "|/-\\";
+    if (g_tui) {
+        char c[2] = { 0, 0 };
+        g_spin = (g_spin + 1) % 4;
+        c[0] = chars[g_spin];
+        put(TAG_X + 2, g_cur_row, ON_BLUE(C_YELLOW), c);
+        return;
+    }
     if (g_spin < 0) { g_spin = 0; color(C_YELLOW); outc(chars[0], 1); return; }
     g_spin = (g_spin + 1) % 4;
     color(C_YELLOW);
@@ -273,6 +491,7 @@ static void spin(void)
 
 static void spin_end(void)
 {
+    if (g_tui) { g_spin = -1; return; }
     if (g_spin >= 0) { out("\b"); g_spin = -1; }
 }
 
@@ -285,7 +504,18 @@ static void tag(const char *t, WORD c)
     color(C_GREY);
 }
 
-static void ok(void) { tag(" OK ", C_GREEN); out("\r\n"); }
+static void ok(void)
+{
+    if (g_tui) {
+        spin_end();
+        tui_tag(TAG_X, g_cur_row, " OK ", C_GREEN);
+        g_done++;
+        tui_bar();
+        return;
+    }
+    tag(" OK ", C_GREEN);
+    out("\r\n");
+}
 
 /* a result that's a value rather than OK, e.g. a version number */
 static void value(const char *v, BOOL good)
@@ -297,26 +527,20 @@ static void value(const char *v, BOOL good)
     out("\r\n");
 }
 
-static void note(const char *text)
-{
-    color(C_YELLOW);
-    out("      ");
-    out(text);
-    color(C_GREY);
-    out("\r\n");
-}
+static void note(const char *text) { msg(text, C_YELLOW); }
 
 static void fail(const char *why, DWORD code)
 {
     char buf[300];
-    if (g_col > 2) { tag("FAIL", C_RED); out("\r\n"); }
+    if (g_tui) {
+        if (g_cur_row >= 0) { spin_end(); tui_tag(TAG_X, g_cur_row, "FAIL", C_RED); }
+    } else if (g_col > 2) {
+        tag("FAIL", C_RED);
+        out("\r\n");
+    }
     if (code) wsprintfA(buf, "%s (error %lu)", why, (unsigned long)code);
     else lstrcpynA(buf, why, sizeof buf);
-    color(C_RED);
-    out("      ");
-    out(buf);
-    color(C_GREY);
-    out("\r\n");
+    msg(buf, C_RED);
     g_errors++;
 }
 
@@ -574,6 +798,34 @@ static BOOL installed_dir(WCHAR *dir)
     return found;
 }
 
+#define ARP_KEY L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\urlmagic4"
+
+static void set_sz(HKEY k, const WCHAR *name, const WCHAR *v)
+{
+    RegSetValueExW(k, name, 0, REG_SZ, (const BYTE *)v, (lstrlenW(v) + 1) * sizeof(WCHAR));
+}
+
+/* Control Panel > Add/Remove Programs: runs the copy of this installer with /remove */
+static void arp_register(const WCHAR *dir)
+{
+    HKEY k;
+    DWORD disp, one = 1;
+    WCHAR exe[MAX_PATH], cmd[MAX_PATH + 20];
+    join(exe, dir, g_self);
+    wsprintfW(cmd, L"\"%s\" /remove", exe);
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, ARP_KEY, 0, NULL, 0, KEY_WRITE, NULL, &k, &disp) != ERROR_SUCCESS) return;
+    set_sz(k, L"DisplayName", L"URL Magic " UM_VERSION_WSTR L" (urlmagic4)");
+    set_sz(k, L"DisplayVersion", UM_VERSION_WSTR);
+    set_sz(k, L"Publisher", L"urlmagic4");
+    set_sz(k, L"URLInfoAbout", L"https://github.com/muncherelli/urlmagic4");
+    set_sz(k, L"InstallLocation", dir);
+    set_sz(k, L"DisplayIcon", exe);
+    set_sz(k, L"UninstallString", cmd);
+    RegSetValueExW(k, L"NoModify", 0, REG_DWORD, (const BYTE *)&one, sizeof one);
+    RegSetValueExW(k, L"NoRepair", 0, REG_DWORD, (const BYTE *)&one, sizeof one);
+    RegCloseKey(k);
+}
+
 static void record_dir(const WCHAR *dir)
 {
     HKEY k;
@@ -584,6 +836,7 @@ static void record_dir(const WCHAR *dir)
         RegSetValueExW(k, L"Setup", 0, REG_SZ, (const BYTE *)g_self, (lstrlenW(g_self) + 1) * sizeof(WCHAR));
         RegCloseKey(k);
     }
+    arp_register(dir);
 }
 
 /* ---------------------------------------------------------------- talking to the user */
@@ -722,13 +975,11 @@ static int install(const WCHAR *dir)
         DWORD e;
         join(to, dir, FILES[i]);
         if ((e = extract(FILE_IDS[i], to)) != 0) {
+            char path[MAX_PATH];
             fail("can't write a file", e);
-            color(C_RED);
-            out("      ");
-            outw(to);
-            out("\r\n");
+            WideCharToMultiByte(CP_OEMCP, 0, to, -1, path, MAX_PATH, NULL, NULL);
+            msg(path, C_RED);
             if (e == ERROR_SHARING_VIOLATION) note("It's in use: close Internet Service Manager and run setup again.");
-            color(C_GREY);
             if (running) www(TRUE, NULL);
             return 1;
         }
@@ -751,6 +1002,7 @@ static int install(const WCHAR *dir)
     step("Starting the WWW service");
     if (www(TRUE, NULL)) ok();
 
+    if (g_tui) return g_errors ? 1 : 0;   /* the result screen is drawn by tui_main */
     out("\r\n");
     if (g_errors) {
         color(C_RED);
@@ -819,6 +1071,8 @@ static int uninstall(BOOL purge)
     if (!www(FALSE, &running)) return 1;
     ok();
 
+    RegDeleteKeyW(HKEY_LOCAL_MACHINE, ARP_KEY);          /* out of Add/Remove Programs */
+
     step("Removing the urlmagic4 ISAPI filter from IIS");
     if (filter_unregister()) ok();
 
@@ -880,6 +1134,7 @@ static int uninstall(BOOL purge)
         step("Starting the WWW service");
         if (www(TRUE, NULL)) ok();
     }
+    if (g_tui) return g_errors ? 1 : 0;
     out("\r\n");
     color(g_errors ? C_RED : C_GREEN);
     out(g_errors ? "  \xFE Finished with errors (see above).\r\n" : "  \xFE urlmagic is removed. Poof!\r\n");
@@ -900,6 +1155,241 @@ static void usage(void)
 
 /* ---------------------------------------------------------------- entry point (no CRT) */
 
+/* ---------------------------------------------------------------- full-screen flow */
+
+typedef struct {
+    BOOL nt;
+    DWORD major, minor, build;
+    int sp;
+    BOOL sp6a;
+    DWORD iis_major, iis_minor;
+    BOOL admin;
+    BOOL installed;
+    WCHAR dir[MAX_PATH];
+    WCHAR ver[32];
+} sysinfo;
+
+static void get_sysinfo(sysinfo *si)
+{
+    OSVERSIONINFOA v;
+    HKEY k;
+    DWORD size, type;
+    SC_HANDLE scm;
+    const char *p;
+
+    memset(si, 0, sizeof *si);
+    memset(&v, 0, sizeof v);
+    v.dwOSVersionInfoSize = sizeof v;
+    GetVersionExA(&v);
+    si->nt = v.dwPlatformId == VER_PLATFORM_WIN32_NT;
+    si->major = v.dwMajorVersion;
+    si->minor = v.dwMinorVersion;
+    si->build = v.dwBuildNumber & 0xFFFF;
+    for (p = v.szCSDVersion; *p; p++)
+        if (*p >= '0' && *p <= '9') {
+            si->sp = *p - '0';
+            if (p[1] >= '0' && p[1] <= '9') si->sp = si->sp * 10 + (p[1] - '0');
+            break;
+        }
+    /* Service Pack 6a = SP6 plus hotfix Q246009 */
+    if (si->sp == 6 && RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+            L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Hotfix\\Q246009", 0, KEY_READ, &k) == ERROR_SUCCESS) {
+        si->sp6a = TRUE;
+        RegCloseKey(k);
+    }
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\InetStp", 0, KEY_READ, &k) == ERROR_SUCCESS) {
+        size = sizeof si->iis_major;
+        RegQueryValueExW(k, L"MajorVersion", NULL, &type, (BYTE *)&si->iis_major, &size);
+        size = sizeof si->iis_minor;
+        RegQueryValueExW(k, L"MinorVersion", NULL, &type, (BYTE *)&si->iis_minor, &size);
+        RegCloseKey(k);
+    }
+    scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_ALL_ACCESS);   /* only administrators can */
+    si->admin = scm != NULL;
+    if (scm) CloseServiceHandle(scm);
+    si->installed = installed_dir(si->dir);
+    if (si->installed && RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\urlmagic4", 0, KEY_READ, &k) == ERROR_SUCCESS) {
+        size = sizeof si->ver;
+        if (RegQueryValueExW(k, L"Version", NULL, &type, (BYTE *)si->ver, &size) != ERROR_SUCCESS) si->ver[0] = 0;
+        RegCloseKey(k);
+    }
+}
+
+enum { OK_ = 0, WARN_ = 1, FAIL_ = 2 };
+
+static void check_row(int y, const char *label, const char *val, int level)
+{
+    put(STEP_X + 2, y, A_TEXT, label);
+    put(32, y, A_BRIGHT, val);
+    if (level == OK_) tui_tag(TAG_X, y, " OK ", C_GREEN);
+    else if (level == WARN_) tui_tag(TAG_X, y, "WARN", C_YELLOW);
+    else if (level == FAIL_) tui_tag(TAG_X, y, "FAIL", C_RED);
+}
+
+/* the splash screen; returns 'i' (install), 'u' (uninstall) or 'q' */
+static int splash(const sysinfo *si, BOOL *purge, BOOL remove)
+{
+    char v[MAX_PATH + 40], d[MAX_PATH];
+    const char *problem = NULL, *advice = NULL;
+    int lw, ls, li, k;
+
+    tui_frame();
+    tui_icon(7, 3);                          /* icon 16 + 3 + logo 46, visually centred */
+    tui_logo(7 + 16 + 3, 5);
+    put_center(12, ON_BLUE(C_YELLOW), "The missing IIS tab");
+    put_center(13, A_TEXT, "URL rewriting for IIS 4.0 on Windows NT 4.0");
+
+    put(STEP_X, 15, A_BRIGHT, "System check");
+    fill(STEP_X + 13, 15, ON_BLUE(C_DCYAN), (char)0xC4, TAG_X + 6 - (STEP_X + 13));
+
+    /* Windows */
+    if (!si->nt) { lw = FAIL_; lstrcpyA(v, "Windows 95/98/Me"); problem = "urlmagic needs Windows NT 4.0."; }
+    else {
+        wsprintfA(v, "Windows NT %lu.%lu  (build %lu)", si->major, si->minor, si->build);
+        lw = si->major == 4 ? OK_ : WARN_;
+        if (lw == WARN_) advice = "Not Windows NT 4.0: urlmagic is untested here.";
+    }
+    check_row(16, "Windows", v, lw);
+    /* service pack */
+    if (si->sp == 0) lstrcpyA(v, "None");
+    else wsprintfA(v, "Service Pack %d%s", si->sp, si->sp6a ? "a" : "");
+    ls = OK_;
+    if (si->nt && si->major == 4) {
+        if (si->sp < 3) { ls = FAIL_; if (!problem) problem = "IIS 4.0 needs NT 4.0 Service Pack 3 or later (6a recommended)."; }
+        else if (si->sp < 6) { ls = WARN_; if (!advice) advice = "Service Pack 6a is recommended."; }
+    }
+    check_row(17, "Service pack", v, si->nt ? ls : -1);
+    /* IIS */
+    if (!si->iis_major) { li = FAIL_; lstrcpyA(v, "Not installed"); if (!problem) problem = "Install IIS 4.0 from the NT 4.0 Option Pack first."; }
+    else {
+        wsprintfA(v, "IIS %lu.%lu", si->iis_major, si->iis_minor);
+        li = si->iis_major == 4 ? OK_ : WARN_;
+        if (li == WARN_ && !advice) advice = "Not IIS 4.0: urlmagic is untested here.";
+    }
+    check_row(18, "Web server", v, li);
+    /* administrator */
+    check_row(19, "Administrator", si->admin ? "Yes" : "No", si->admin ? OK_ : FAIL_);
+    if (!si->admin && !problem) problem = "Log on as an Administrator to install urlmagic.";
+    /* urlmagic */
+    if (si->installed) {
+        WideCharToMultiByte(CP_OEMCP, 0, si->dir, -1, d, MAX_PATH, NULL, NULL);
+        WideCharToMultiByte(CP_OEMCP, 0, si->ver[0] ? si->ver : L"?", -1, v, 32, NULL, NULL);
+        lstrcatA(v, " in ");
+        lstrcatA(v, d);
+    } else {
+        lstrcpyA(v, "Not installed");
+    }
+    check_row(20, "urlmagic", v, -1);
+
+    if (remove && !si->installed && !problem) problem = "urlmagic isn't installed.";
+    if (problem) {
+        put(STEP_X, 22, ON_BLUE(C_RED), "Setup can't continue:");
+        put(STEP_X + 22, 22, A_BRIGHT, problem);
+        keybar("ESC=Quit");
+        while (key() != 27) ;
+        return 'q';
+    }
+
+    for (;;) {
+        clear_rows(22, 23);
+        if (remove) {
+            wsprintfA(v, "Setup will remove urlmagic from %s.", d);
+            put(STEP_X, 22, A_BRIGHT, v);
+            put(STEP_X, 23, ON_BLUE(C_YELLOW), "Web sites go offline for a few seconds while the WWW service restarts.");
+            keybar("ENTER=Uninstall   ESC=Cancel");
+            k = key();
+            if (k == 27) return 'q';
+            if (k == 13) k = 'u';
+        } else if (si->installed) {
+            WCHAR dflt[MAX_PATH];
+            default_dir(dflt);
+            wsprintfA(v, "Setup will install urlmagic %s over the copy in %s.", UM_VERSION_STR, d);
+            put(STEP_X, 22, A_BRIGHT, v);
+        } else {
+            WCHAR dflt[MAX_PATH];
+            default_dir(dflt);
+            WideCharToMultiByte(CP_OEMCP, 0, dflt, -1, d, MAX_PATH, NULL, NULL);
+            wsprintfA(v, "Setup will install urlmagic %s to %s.", UM_VERSION_STR, d);
+            put(STEP_X, 22, A_BRIGHT, v);
+        }
+        if (!remove) {
+            put(STEP_X, 23, ON_BLUE(C_YELLOW), advice ? advice :
+                "Web sites go offline for a few seconds while the WWW service restarts.");
+            keybar(si->installed ? "ENTER=Install   U=Uninstall   ESC=Quit" : "ENTER=Install   ESC=Quit");
+            k = key();
+            if (k == 27) return 'q';
+            if (k == 13) return 'i';
+        }
+        if (k == 'u' && si->installed) {
+            clear_rows(22, 23);
+            put(STEP_X, 22, A_BRIGHT, "Also delete every web site's URL Magic settings?");
+            put(STEP_X, 23, A_TEXT, "Keep them if you might install urlmagic again.");
+            keybar("Y=Delete settings   N=Keep settings   ESC=Back");
+            for (;;) {
+                k = key();
+                if (k == 'y' || k == 'n') { *purge = k == 'y'; return 'u'; }
+                if (k == 27) break;
+            }
+        }
+    }
+}
+
+static void tui_result(BOOL installing, BOOL purge, const WCHAR *dir)
+{
+    int y = RES_ROW, i;
+    char line[MAX_PATH + 60], d[MAX_PATH];
+
+    if (!g_errors) { g_done = g_total; tui_bar(); }
+    if (g_errors) {
+        put(STEP_X, y++, ON_BLUE(C_RED), installing ? "\xFE Setup ran into problems:" : "\xFE Uninstall ran into problems:");
+    } else if (installing) {
+        put(STEP_X, y++, ON_BLUE(C_GREEN), "\xFE urlmagic " UM_VERSION_STR " is installed. Abracadabra!");
+    } else {
+        put(STEP_X, y++, ON_BLUE(C_GREEN), "\xFE urlmagic is removed. Poof!");
+    }
+    y++;
+    for (i = 0; i < g_nmsgs && y < SCR_H - 2; i++) put(STEP_X + 2, y++, ON_BLUE(g_msg_fg[i]), g_msgs[i]);
+    if (!g_errors && installing) {
+        put(STEP_X, y, A_BRIGHT, "1.");
+        put(STEP_X + 3, y++, A_TEXT, "Internet Service Manager > a web site's Properties > URL Magic.");
+        put(STEP_X + 3, y++, A_TEXT, "No tab? Console > Add/Remove Snap-in > Extensions: tick URL Magic.");
+        put(STEP_X, y, A_BRIGHT, "2.");
+        put(STEP_X + 3, y++, A_TEXT, "Put rules in a .htaccess in the site's home directory, e.g.");
+        put(STEP_X + 6, y++, ON_BLUE(C_CYAN), "RewriteEngine On");
+        put(STEP_X + 6, y++, ON_BLUE(C_CYAN), "RewriteRule ^old-page$ /new-page [R=301,L]");
+        WideCharToMultiByte(CP_OEMCP, 0, dir, -1, d, MAX_PATH, NULL, NULL);
+        wsprintfA(line, "Rule problems are logged to %s\\urlmagic4.log", d);
+        put(STEP_X, SCR_H - 3, A_TEXT, line);
+    } else if (!g_errors && !purge) {
+        put(STEP_X, y++, A_TEXT, "Each web site's URL Magic settings were kept, in case you reinstall.");
+    }
+    keybar("ENTER=Close");
+    while ((i = key()) != 13 && i != 27) ;
+}
+
+static int tui_main(BOOL remove)
+{
+    sysinfo si;
+    BOOL purge = FALSE;
+    WCHAR dir[MAX_PATH];
+    int action, rc;
+
+    get_sysinfo(&si);
+    action = splash(&si, &purge, remove);
+    if (action == 'q') return 0;
+    if (action == 'i') {
+        if (si.installed) lstrcpynW(dir, si.dir, MAX_PATH); else default_dir(dir);
+        g_total = 5;
+        rc = install(dir);
+    } else {
+        lstrcpynW(dir, si.dir, MAX_PATH);
+        g_total = purge ? 6 : 5;
+        rc = uninstall(purge);
+    }
+    tui_result(action == 'i', purge, dir);
+    return rc;
+}
+
 void WINAPI start(void)
 {
     int argc, rc = 0;
@@ -914,12 +1404,20 @@ void WINAPI start(void)
         lstrcpynW(g_self, path + i, MAX_PATH);
     }
     CoInitialize(NULL);
-    g_interactive = argv && argc == 1;
+    /* double-click (no arguments), or Add/Remove Programs (/remove): the full-screen setup */
+    g_interactive = argv && (argc == 1 || (argc == 2 && lstrcmpiW(argv[1], L"/remove") == 0));
 
     ui_init();
+    if (g_interactive && tui_begin()) {
+        rc = tui_main(argc == 2);
+        if (argv) LocalFree(argv);
+        CoUninitialize();
+        ExitProcess((UINT)rc);
+    }
     banner();
     if (!argv) rc = 1;
-    else if (argc >= 2 && lstrcmpiW(argv[1], L"uninstall") != 0 && lstrcmpiW(argv[1], L"install") != 0) {
+    else if (argc >= 2 && lstrcmpiW(argv[1], L"uninstall") != 0 && lstrcmpiW(argv[1], L"install") != 0 &&
+             lstrcmpiW(argv[1], L"/remove") != 0) {
         usage();
         rc = (lstrcmpiW(argv[1], L"/?") == 0 || lstrcmpiW(argv[1], L"-h") == 0 ||
               lstrcmpiW(argv[1], L"help") == 0) ? 0 : 2;
@@ -946,8 +1444,11 @@ void WINAPI start(void)
             outw(have);
             color(C_GREY);
             out(".\r\n\r\n");
-            c = ask("[I]nstall " UM_VERSION_STR " over it, [U]ninstall, or [Q]uit? ");
-            out("\r\n");
+            if (argc == 2) c = 'u';                        /* /remove, from Add/Remove Programs */
+            else {
+                c = ask("[I]nstall " UM_VERSION_STR " over it, [U]ninstall, or [Q]uit? ");
+                out("\r\n");
+            }
             if (c == 'i') {
                 if (confirm_restart("is updated")) rc = install(have);
             } else if (c == 'u') {
