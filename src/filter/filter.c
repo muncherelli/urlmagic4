@@ -484,17 +484,21 @@ static int env_file_type(void *ctx, const char *fspath)
 /* ---------------------------------------------------------------- responses */
 
 /* Send a whole small response in one piece (headers and body together: two small sends can
-   stall on Nagle + delayed ACK). */
+   stall on Nagle + delayed ACK). GET and HEAD over HTTP/1.1 keep the connection open, so a
+   proxy in front can reuse it. */
 static DWORD respond(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr,
                      const char *status, const char *location)
 {
-    char buf[URL_CAP + 700], body[300], method[16];
+    char buf[URL_CAP + 700], body[300], method[16], version[16];
     DWORD n;
-    BOOL head;
+    BOOL head, keep;
 
     n = sizeof method;
     if (!hdr->GetHeader(pfc, "method", method, &n)) method[0] = 0;
+    n = sizeof version;
+    if (!hdr->GetHeader(pfc, "version", version, &n)) version[0] = 0;
     head = ieq(method, "HEAD");
+    keep = (head || ieq(method, "GET")) && ieq(version, "HTTP/1.1");
 
     wsprintfA(body, "<html><head><title>%s</title></head><body><h1>%s</h1></body></html>", status, status);
     buf[0] = 0;
@@ -504,11 +508,11 @@ static DWORD respond(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr,
         cat(buf, "\r\n", sizeof buf);
     }
     n = (DWORD)strlen(buf);
-    wsprintfA(buf + n, "Content-Type: text/html\r\nContent-Length: %u\r\n\r\n",
-              (unsigned)strlen(body));
+    wsprintfA(buf + n, "Content-Type: text/html\r\nContent-Length: %u\r\n%s\r\n",
+              (unsigned)strlen(body), keep ? "" : "Connection: close\r\n");
     if (!head) cat(buf, body, sizeof buf);
     pfc->ServerSupportFunction(pfc, SF_REQ_SEND_RESPONSE_HEADER, (PVOID)status, (ULONG_PTR)buf, 0);
-    return SF_STATUS_REQ_FINISHED;
+    return keep ? SF_STATUS_REQ_FINISHED_KEEP_CONN : SF_STATUS_REQ_FINISHED;
 }
 
 static const char *redirect_status(int code)
