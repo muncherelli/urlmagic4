@@ -1231,7 +1231,7 @@ static int splash(const sysinfo *si, BOOL *purge, BOOL remove)
 {
     char v[MAX_PATH + 40], d[MAX_PATH];
     const char *problem = NULL, *advice = NULL;
-    const char *quit = remove ? "ESC=Cancel   CTRL+C=Quit" : "ESC=Quit   CTRL+C=Quit";
+    const char *quit = remove ? "ESC/CTRL+C=Cancel" : "ESC/CTRL+C=Quit";
     char keys[100];
     int lw, ls, li, k;
 
@@ -1285,7 +1285,7 @@ static int splash(const sysinfo *si, BOOL *purge, BOOL remove)
     if (problem) {
         put(STEP_X, MSG_ROW, ON_BLUE(C_RED), "Setup can't continue:");
         put(STEP_X, MSG_ROW + 1, A_BRIGHT, problem);
-        keybar("ESC=Quit   CTRL+C=Quit");
+        keybar("ESC/CTRL+C=Quit");
         while ((k = key()) != 27 && k != 3) ;
         return 'q';
     }
