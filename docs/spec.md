@@ -83,7 +83,7 @@ directory is a UNC share (e.g. a dev site served from Samba):
 Each web site's Properties dialog in Internet Service Manager has a **URL Magic** tab:
 rewriting on/off, rules format (automatic by file name, Apache, `httpd.ini`), and rules
 file (the site's home directory, or any file). Stored in
-`HKLM\SOFTWARE\urlmagic4\Sites\W3SVC\<site number>` (see `src/common/settings.h`); the filter
+`HKLM\SOFTWARE\URLMagic4\Sites\W3SVC\<site number>` (see `src/common/settings.h`); the filter
 re-reads it every few seconds.
 
 ## 4. Directives (v1)

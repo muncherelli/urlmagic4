@@ -1,7 +1,12 @@
 /*
  * Per-site settings, shared by the IIS manager tab (writes) and the filter (reads).
  *
- *   HKLM\SOFTWARE\urlmagic4\Sites\<SERVICE>\<instance>      e.g. ...\Sites\W3SVC\3
+ *   HKLM\SOFTWARE\URLMagic4\Sites\<SERVICE>\<instance>      e.g. ...\Sites\W3SVC\3
+ *
+ * The key mirrors IIS's own metabase path /LM/<SERVICE>/<instance>: the service ("W3SVC" for
+ * web sites) and the site's number on that service, so any number of sites, and other IIS
+ * services, each get their own key. Every server keeps its own settings in its own registry
+ * (the tab writes to the registry of whichever server Internet Service Manager is managing).
  *     Enabled    REG_DWORD  1 = rewrite this site (default 1)
  *     Format     REG_SZ     "auto" | "htaccess" | "httpd.ini"           (default "auto")
  *     Source     REG_SZ     "docroot" | "file"                          (default "docroot")
@@ -16,7 +21,8 @@
 
 #include <windows.h>
 
-#define UM_REG_SITES L"SOFTWARE\\urlmagic4\\Sites"
+#define UM_REG_ROOT  L"SOFTWARE\\URLMagic4"
+#define UM_REG_SITES UM_REG_ROOT L"\\Sites"
 
 enum { UM_FMT_AUTO = 0, UM_FMT_HTACCESS = 1, UM_FMT_HTTPDINI = 2 };
 enum { UM_SRC_DOCROOT = 0, UM_SRC_FILE = 1 };

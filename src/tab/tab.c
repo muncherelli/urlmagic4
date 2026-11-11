@@ -521,7 +521,7 @@ HRESULT WINAPI DllUnregisterServer(void)
     delete_tree(HKEY_LOCAL_MACHINE, path);
     wsprintfW(path, L"CLSID\\%s", CLSID_Tab_Str);
     delete_tree(HKEY_CLASSES_ROOT, path);
-    return S_OK;   /* site settings under HKLM\SOFTWARE\urlmagic4 are kept */
+    return S_OK;   /* site settings under HKLM\SOFTWARE\URLMagic4 are kept */
 }
 
 BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID reserved)

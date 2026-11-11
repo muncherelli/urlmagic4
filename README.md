@@ -54,7 +54,7 @@ Requirements: Windows NT 4.0 (SP6a recommended) with IIS 4.0, any 486 or later C
    picked up within a couple of seconds; no restart needed.
 
 Each web site's **Properties → URL Magic** tab turns rewriting on or off and chooses the
-rules format and file. Settings live in `HKLM\SOFTWARE\urlmagic4\Sites\W3SVC\<site number>`.
+rules format and file. Settings live in `HKLM\SOFTWARE\URLMagic4\Sites\W3SVC\<site number>`.
 Problems in rules files are written to `urlmagic4.log` in the install folder.
 
 **Uninstall:** Control Panel → Add/Remove Programs → *URL Magic*, or run the installer again

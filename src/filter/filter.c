@@ -463,6 +463,46 @@ static BOOL is_rules_file(const char *url)
 
 /* ---------------------------------------------------------------- ISAPI exports */
 
+/* At startup: one log line per site that has URL Magic settings (Sites\<service>\<n>). */
+static void log_sites(void)
+{
+    static const char *fmts[] = { "automatic", "Apache", "httpd.ini" };
+    HKEY root, svc;
+    WCHAR service[32], inst[16];
+    DWORD i, j, n;
+    int count = 0;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UM_REG_SITES, 0, KEY_READ, &root) != ERROR_SUCCESS) {
+        log_line("no site has URL Magic settings yet: sites use the defaults");
+        return;
+    }
+    for (i = 0; n = 32, RegEnumKeyExW(root, i, service, &n, NULL, NULL, NULL, NULL) == ERROR_SUCCESS; i++) {
+        if (RegOpenKeyExW(root, service, 0, KEY_READ, &svc) != ERROR_SUCCESS) continue;
+        for (j = 0; n = 16, RegEnumKeyExW(svc, j, inst, &n, NULL, NULL, NULL, NULL) == ERROR_SUCCESS; j++) {
+            um_site cfg;
+            DWORD id = 0;
+            const WCHAR *p;
+            char sv[32], file[MAX_PATH], m[MAX_PATH + 160];
+            for (p = inst; *p >= L'0' && *p <= L'9'; p++) id = id * 10 + (DWORD)(*p - L'0');
+            if (!id || *p) continue;
+            um_site_read(HKEY_LOCAL_MACHINE, service, id, &cfg);
+            WideCharToMultiByte(CP_ACP, 0, service, -1, sv, sizeof sv, NULL, NULL);
+            if (cfg.source == UM_SRC_FILE)
+                WideCharToMultiByte(CP_ACP, 0, cfg.rules_file, -1, file, MAX_PATH, NULL, NULL);
+            else
+                lstrcpyA(file, "the site's home directory");
+            wsprintfA(m, "site %s/%lu: rewriting %s, format %s, rules from %s%s", sv, (unsigned long)id,
+                      cfg.enabled ? "on" : "off", fmts[cfg.format <= 2 ? cfg.format : 0], file,
+                      cfg.debug ? ", debug on" : "");
+            log_line(m);
+            count++;
+        }
+        RegCloseKey(svc);
+    }
+    RegCloseKey(root);
+    if (!count) log_line("no site has URL Magic settings yet: sites use the defaults");
+}
+
 BOOL WINAPI GetFilterVersion(HTTP_FILTER_VERSION *ver)
 {
     ver->dwFilterVersion = HTTP_FILTER_REVISION;
@@ -470,6 +510,7 @@ BOOL WINAPI GetFilterVersion(HTTP_FILTER_VERSION *ver)
     ver->dwFlags = SF_NOTIFY_ORDER_HIGH | SF_NOTIFY_SECURE_PORT | SF_NOTIFY_NONSECURE_PORT |
                    SF_NOTIFY_PREPROC_HEADERS;
     log_line("urlmagic4 " UM_VERSION_STR " loaded");
+    log_sites();
     return TRUE;
 }
 

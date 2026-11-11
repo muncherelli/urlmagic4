@@ -22,6 +22,7 @@
 
 #include "version.h"
 #include "payload.h"
+#include "../common/settings.h"
 
 static const GUID CLSID_UmMSAdminBase =
     {0xa9e69610, 0xb80d, 0x11d0, {0xb9, 0xb9, 0x00, 0xa0, 0xc9, 0x22, 0xe7, 0x50}};
@@ -792,7 +793,7 @@ static BOOL installed_dir(WCHAR *dir)
     HKEY k;
     DWORD type, size = MAX_PATH * sizeof(WCHAR);
     BOOL found = FALSE;
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\urlmagic4", 0, KEY_READ, &k) == ERROR_SUCCESS) {
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UM_REG_ROOT, 0, KEY_READ, &k) == ERROR_SUCCESS) {
         found = RegQueryValueExW(k, L"InstallDir", NULL, &type, (BYTE *)dir, &size) == ERROR_SUCCESS &&
                 type == REG_SZ;
         RegCloseKey(k);
@@ -800,7 +801,7 @@ static BOOL installed_dir(WCHAR *dir)
     return found;
 }
 
-#define ARP_KEY L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\urlmagic4"
+#define ARP_KEY L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\URLMagic4"
 
 static void set_sz(HKEY k, const WCHAR *name, const WCHAR *v)
 {
@@ -832,7 +833,7 @@ static void record_dir(const WCHAR *dir)
 {
     HKEY k;
     DWORD disp;
-    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\urlmagic4", 0, NULL, 0, KEY_WRITE, NULL, &k, &disp) == ERROR_SUCCESS) {
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, UM_REG_ROOT, 0, NULL, 0, KEY_WRITE, NULL, &k, &disp) == ERROR_SUCCESS) {
         RegSetValueExW(k, L"InstallDir", 0, REG_SZ, (const BYTE *)dir, (lstrlenW(dir) + 1) * sizeof(WCHAR));
         RegSetValueExW(k, L"Version", 0, REG_SZ, (const BYTE *)UM_VERSION_WSTR, sizeof(UM_VERSION_WSTR));
         RegSetValueExW(k, L"Setup", 0, REG_SZ, (const BYTE *)g_self, (lstrlenW(g_self) + 1) * sizeof(WCHAR));
@@ -1099,7 +1100,7 @@ static int uninstall(BOOL purge)
         HKEY k;
         DWORD type, size = sizeof setup;
         setup[0] = 0;
-        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\urlmagic4", 0, KEY_READ, &k) == ERROR_SUCCESS) {
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UM_REG_ROOT, 0, KEY_READ, &k) == ERROR_SUCCESS) {
             if (RegQueryValueExW(k, L"Setup", NULL, &type, (BYTE *)setup, &size) != ERROR_SUCCESS || type != REG_SZ)
                 setup[0] = 0;
             RegCloseKey(k);
@@ -1135,11 +1136,11 @@ static int uninstall(BOOL purge)
 
     if (purge) {
         step("Deleting every site's urlmagic4 settings");
-        delete_tree(HKEY_LOCAL_MACHINE, L"SOFTWARE\\urlmagic4");
+        delete_tree(HKEY_LOCAL_MACHINE, UM_REG_ROOT);
         ok();
     } else {
         HKEY k;
-        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\urlmagic4", 0, KEY_SET_VALUE, &k) == ERROR_SUCCESS) {
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UM_REG_ROOT, 0, KEY_SET_VALUE, &k) == ERROR_SUCCESS) {
             RegDeleteValueW(k, L"InstallDir");
             RegDeleteValueW(k, L"Version");
             RegDeleteValueW(k, L"Setup");
@@ -1225,7 +1226,7 @@ static void get_sysinfo(sysinfo *si)
     si->admin = scm != NULL;
     if (scm) CloseServiceHandle(scm);
     si->installed = installed_dir(si->dir);
-    if (si->installed && RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\urlmagic4", 0, KEY_READ, &k) == ERROR_SUCCESS) {
+    if (si->installed && RegOpenKeyExW(HKEY_LOCAL_MACHINE, UM_REG_ROOT, 0, KEY_READ, &k) == ERROR_SUCCESS) {
         size = sizeof si->ver;
         if (RegQueryValueExW(k, L"Version", NULL, &type, (BYTE *)si->ver, &size) != ERROR_SUCCESS) si->ver[0] = 0;
         RegCloseKey(k);
@@ -1544,7 +1545,7 @@ void WINAPI start(void)
         DWORD type, size = sizeof ver;
         int c;
         ver[0] = 0;
-        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\urlmagic4", 0, KEY_READ, &k) == ERROR_SUCCESS) {
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UM_REG_ROOT, 0, KEY_READ, &k) == ERROR_SUCCESS) {
             RegQueryValueExW(k, L"Version", NULL, &type, (BYTE *)ver, &size);
             RegCloseKey(k);
         }
