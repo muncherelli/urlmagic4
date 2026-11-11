@@ -6,3 +6,5 @@
 *.lib
 *.exp
 /spike/mmctab/*.o
+node_modules/
+package-lock.json

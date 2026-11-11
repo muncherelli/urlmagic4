@@ -1,0 +1,42 @@
+name: Release
+
+# On every push to trunk: open/update the "Version Packages" pull request from pending
+# changesets. Run manually (Actions > Release > Run workflow) to publish the current version.
+on:
+  push:
+    branches: [trunk]
+  workflow_dispatch:
+
+concurrency: release-${{ github.ref }}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - name: Install the MinGW-w64 i686 cross-compiler
+        if: github.event_name == 'workflow_dispatch'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-mingw-w64-i686 binutils-mingw-w64-i686 make
+      - name: Build release zip
+        if: github.event_name == 'workflow_dispatch'
+        run: make dist
+      - uses: changesets/action@v1
+        with:
+          version: npm run version
+          publish: ${{ github.event_name == 'workflow_dispatch' && 'npm run release' || '' }}
+          title: "chore: version packages"
+          commit: "chore: version packages"
+          createGithubReleases: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

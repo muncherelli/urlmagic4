@@ -1,0 +1,22 @@
+name: Build
+
+on:
+  push:
+    branches: [trunk]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install the MinGW-w64 i686 cross-compiler
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-mingw-w64-i686 binutils-mingw-w64-i686 make
+      - run: make dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: urlmagic4
+          path: build/urlmagic4-*.zip

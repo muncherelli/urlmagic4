@@ -1,6 +1,10 @@
 # urlmagic4 - built with the MinGW-w64 i686 cross-compiler, for Windows NT 4.0 on 486+ CPUs.
 #   make            build/urlmagic4tab.dll
+#   make dist       build/urlmagic4-<version>.zip (DLLs + README + LICENSE + CHANGELOG)
 #   make install    copy the DLLs to $(DEST) (default ~/Development/files)
+comma := ,
+VERSION := $(shell sed -n 's/^  "version": *"\([^"]*\)".*/\1/p' package.json)
+VERSION_NUM := $(subst .,$(comma),$(firstword $(subst -, ,$(VERSION))))$(comma)0
 CC      = i686-w64-mingw32-gcc
 WINDRES = i686-w64-mingw32-windres
 DEST   ?= $(HOME)/Development/files
@@ -26,6 +30,10 @@ all: $(B)/urlmagic4tab.dll
 $(B):
 	mkdir -p $@
 
+# version stamped into the DLLs' VERSIONINFO (from package.json, bumped by Changesets)
+$(B)/version.h: package.json | $(B)
+	printf '#define UM_VERSION_STR "%s"\n#define UM_VERSION_NUM %s\n' '$(VERSION)' '$(VERSION_NUM)' > $@
+
 $(B)/urlmagic4tab.dll: $(TAB_OBJS) src/tab/tab.def
 	$(CC) $(LDFLAGS) -o $@ $(TAB_OBJS) src/tab/tab.def $(TAB_LIBS)
 	@if i686-w64-mingw32-objdump -d $@ | grep -qE '\bcmov|\bf(u)?comi'; then \
@@ -33,12 +41,18 @@ $(B)/urlmagic4tab.dll: $(TAB_OBJS) src/tab/tab.def
 
 $(B)/tab.o: src/tab/tab.c src/tab/resource.h src/common/settings.h | $(B)
 	$(CC) $(CFLAGS) -c -o $@ $<
-$(B)/tab.res.o: src/tab/tab.rc src/tab/resource.h res/urlmagic4.ico | $(B)
-	$(WINDRES) -O coff -I src/tab -o $@ $<
+$(B)/tab.res.o: src/tab/tab.rc src/tab/resource.h res/urlmagic4.ico $(B)/version.h | $(B)
+	$(WINDRES) -O coff -I src/tab -I $(B) -o $@ $<
 $(B)/settings.o: src/common/settings.c src/common/settings.h | $(B)
 	$(CC) $(CFLAGS) -c -o $@ $<
 $(B)/nocrt.o: src/common/nocrt.c | $(B)
 	$(CC) $(CFLAGS) -c -o $@ $<
+
+dist: all
+	rm -rf $(B)/dist $(B)/urlmagic4-$(VERSION).zip
+	mkdir -p $(B)/dist
+	cp $(B)/*.dll README.md LICENSE CHANGELOG.md $(B)/dist/
+	cd $(B)/dist && python3 -m zipfile -c ../urlmagic4-$(VERSION).zip *
 
 install: all
 	install -m 0644 $(B)/urlmagic4tab.dll $(DEST)/
@@ -46,4 +60,4 @@ install: all
 clean:
 	rm -rf $(B)
 
-.PHONY: all install clean
+.PHONY: all dist install clean
