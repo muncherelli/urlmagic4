@@ -83,6 +83,24 @@ void WINAPI start(void)
 {
     out = GetStdHandle(STD_OUTPUT_HANDLE);
     say("urlmagic4 engine benchmark: microseconds per request, best of 5 x 4000\r\n\r\n");
+    {
+        /* what one clock reading costs (the filter's debug timings take three) */
+        LARGE_INTEGER f, t0, t1, x;
+        LONGLONG best = 0;
+        DWORD ns;
+        int i, run;
+        char line[120];
+        QueryPerformanceFrequency(&f);
+        for (run = 0; run < RUNS; run++) {
+            QueryPerformanceCounter(&t0);
+            for (i = 0; i < ROUNDS; i++) QueryPerformanceCounter(&x);
+            QueryPerformanceCounter(&t1);
+            if (!run || t1.QuadPart - t0.QuadPart < best) best = t1.QuadPart - t0.QuadPart;
+        }
+        ns = (DWORD)(best * 1000000000 / f.QuadPart / ROUNDS);
+        wsprintfA(line, "%-34s %5lu.%02lu us\r\n", "one clock reading (timer cost)", ns / 1000, (ns % 1000) / 10);
+        say(line);
+    }
     scenario("no rule matches (1 rule)", "RewriteEngine On\nRewriteRule ^magic$ index.cfm [L]\n",
              "/assets/site.css");
     scenario("no rule matches (10 rules)", "RewriteEngine On\n" TEN_MISSES, "/assets/site.css");
