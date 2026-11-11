@@ -12,7 +12,7 @@ RewriteCond %{REQUEST_FILENAME} !-d
 RewriteRule ^(.*)$ index.cfm?page=$1 [L,QSA]
 ```
 
-> **Status:** early design. Nothing to download yet.
+> **Status:** 4.0.0 in development: Apache-style `.htaccess` rules work; `httpd.ini` support is next.
 
 ## Goals
 
@@ -28,25 +28,50 @@ See [docs/spec.md](docs/spec.md) for what's supported, and
 urlmagic4 is an independent project, not affiliated with Helicon Tech; ISAPI_Rewrite is
 their trademark.
 
-## Install (IIS manager tab)
+## Install
 
-The **URL Magic 4** tab in Internet Service Manager sets, per web site, whether rewriting is on,
-which rule format to use, and where the rules file is.
+Requirements: Windows NT 4.0 (SP6a recommended) with IIS 4.0, any 486 or later CPU.
 
-1. Copy `urlmagic4tab.dll` to a folder on the server's local disk, e.g. `C:\urlmagic4\`.
-2. Register it: `regsvr32 C:\urlmagic4\urlmagic4tab.dll`
-3. Open **Internet Service Manager** and enable it once: **Console → Add/Remove Snap-in →
-   Extensions**, choose *Internet Information Server*, tick **URL Magic 4**, OK. Then
-   **Console → Save** so it stays enabled.
-4. Right-click a web site → **Properties** → **URL Magic 4**.
+1. Download `urlmagic4-<version>.zip` from the
+   [releases](https://github.com/muncherelli/urlmagic4/releases), unzip it on the server.
+2. Close Internet Service Manager, then from a command prompt in the unzipped folder:
 
-Settings are stored in `HKLM\SOFTWARE\urlmagic4\Sites\W3SVC\<site number>`.
-To remove the tab: `regsvr32 /u C:\urlmagic4\urlmagic4tab.dll` (site settings are kept).
+   ```
+   setup
+   ```
+
+   This stops the WWW service, copies everything to `%SystemDrive%\urlmagic4`, registers the
+   URL Magic 4 tab, adds urlmagic4 to IIS's ISAPI filters and starts the WWW service again.
+   (`setup install D:\some\folder` installs elsewhere.)
+3. Show the tab, once: open **Internet Service Manager**, **Console → Add/Remove Snap-in →
+   Extensions**, choose *Internet Information Server*, tick **URL Magic 4**, OK, then
+   **Console → Save**.
+4. Put a `.htaccess` in a web site's home directory (see the example above). Changes are
+   picked up within a couple of seconds; no restart needed.
+
+Each web site's **Properties → URL Magic 4** tab turns rewriting on or off and chooses the
+rules format and file. Settings live in `HKLM\SOFTWARE\urlmagic4\Sites\W3SVC\<site number>`.
+Problems in rules files are written to `urlmagic4.log` in the install folder.
+
+**Uninstall:** `setup uninstall` (keeps each site's settings) or `setup uninstall /purge`.
+
+**Sites whose home directory is a network share:** IIS runs filters as LocalSystem, which
+can't read network shares. Keep that site's rules file on the server's own disk and choose it
+with *In this file* on the tab; `-f`/`-d` tests can't see the site's files, so match static
+folders by name instead (`RewriteRule ^assets/ - [L]`).
 
 ## Building
 
 On Linux with the MinGW-w64 i686 cross-compiler (`gcc-mingw-w64-i686` on Debian,
-`mingw-w64-gcc` on Arch): `make`. The DLLs land in `build/`.
+`mingw-w64-gcc` on Arch):
+
+* `make` builds `build/urlmagic4.dll`, `build/urlmagic4tab.dll` and `build/setup.exe`
+* `make test` runs the rewrite engine's tests natively (needs `gcc`)
+* `make dist` makes the release zip
+
+Releases use [semver](https://semver.org) and Changesets: see [docs/releasing.md](docs/releasing.md).
+Regular expressions are [PCRE2](https://github.com/PCRE2Project/pcre2) (BSD licence), bundled
+in `third_party/pcre2`.
 
 ## License
 

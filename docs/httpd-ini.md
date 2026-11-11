@@ -9,7 +9,7 @@ Items marked **(verify)** are not certain from the documentation and must be set
 testing against ISAPI_Rewrite 2 Lite on IIS 4.0 before they are implemented.
 
 For the default Apache-style format and everything shared by both (target, build, IIS
-hooks, the `SiteConfig` extension), see [spec.md](spec.md).
+hooks, per-site settings), see [spec.md](spec.md).
 
 ## 1. Configuration files
 
@@ -26,8 +26,8 @@ hooks, the `SiteConfig` extension), see [spec.md](spec.md).
 * The filter itself always refuses requests for `httpd.ini` and `httpd.parse.errors`
   (any directory, any case) with 404, so site rule files can never be downloaded.
 
-Sites on network shares: as in [spec.md](spec.md), `SiteConfig` in the server file can
-point a site at a local rule file of either format.
+Sites on network shares: as in [spec.md](spec.md), the site's URL Magic 4 tab can point it at
+a rules file on the server's own disk.
 
 ## 2. Directives
 

@@ -1,0 +1,30 @@
+#include <windows.h>
+#include "version.h"
+
+1 ICON "../../res/urlmagic4.ico"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION    UM_VERSION_NUM
+ PRODUCTVERSION UM_VERSION_NUM
+ FILEOS         VOS_NT_WINDOWS32
+ FILETYPE       VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "urlmagic4 contributors\0"
+            VALUE "FileDescription",  "urlmagic4 setup\0"
+            VALUE "FileVersion",      UM_VERSION_STR "\0"
+            VALUE "InternalName",     "setup\0"
+            VALUE "LegalCopyright",   "MIT License\0"
+            VALUE "OriginalFilename", "setup.exe\0"
+            VALUE "ProductName",      "urlmagic4\0"
+            VALUE "ProductVersion",   UM_VERSION_STR "\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

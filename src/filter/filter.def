@@ -1,0 +1,5 @@
+LIBRARY urlmagic4
+EXPORTS
+    GetFilterVersion
+    HttpFilterProc
+    TerminateFilter

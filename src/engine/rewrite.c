@@ -4,8 +4,12 @@
  * Rules run once, top to bottom, against the URL path without its leading "/" (as in an
  * Apache .htaccess). Regexes are PCRE2.
  */
+#ifndef PCRE2_CODE_UNIT_WIDTH
 #define PCRE2_CODE_UNIT_WIDTH 8
+#endif
+#ifndef PCRE2_STATIC
 #define PCRE2_STATIC
+#endif
 #include <stdlib.h>
 #include <string.h>
 #include "pcre2.h"

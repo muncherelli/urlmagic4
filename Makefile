@@ -1,5 +1,6 @@
 # urlmagic4 - built with the MinGW-w64 i686 cross-compiler, for Windows NT 4.0 on 486+ CPUs.
-#   make            build/urlmagic4tab.dll
+#   make            build/urlmagic4.dll (the filter) and build/urlmagic4tab.dll (the tab)
+#   make test       run the rewrite engine's tests natively
 #   make dist       build/urlmagic4-<version>.zip (DLLs + README + LICENSE + CHANGELOG)
 #   make install    copy the DLLs to $(DEST) (default ~/Development/files)
 comma := ,
@@ -25,19 +26,55 @@ LDFLAGS = -shared -nostdlib -s -Wl,-e,_DllMain@12 -Wl,--enable-stdcall-fixup \
 TAB_OBJS = $(B)/tab.o $(B)/tab.res.o $(B)/settings.o $(B)/nocrt.o
 TAB_LIBS = -lkernel32 -luser32 -ladvapi32 -lole32 -lcomctl32 -lcomdlg32
 
-all: $(B)/urlmagic4tab.dll
+PCRE2_SRC   = $(wildcard third_party/pcre2/src/*.c)
+PCRE2_DEFS  = -DHAVE_CONFIG_H -DPCRE2_CODE_UNIT_WIDTH=8 -DPCRE2_STATIC -DMATCH_LIMIT=200000 -DHEAP_LIMIT=8192
+PCRE2_OBJS  = $(patsubst third_party/pcre2/src/%.c,$(B)/pcre2/%.o,$(PCRE2_SRC))
+
+FILTER_OBJS = $(B)/filter.o $(B)/filter.res.o $(B)/rewrite.o $(B)/settings.o $(B)/nocrt.o $(PCRE2_OBJS)
+FILTER_LIBS = -lkernel32 -luser32 -ladvapi32 -lole32 -lgcc
+
+SETUP_OBJS  = $(B)/setup.o $(B)/setup.res.o $(B)/nocrt.o
+SETUP_LIBS  = -lkernel32 -luser32 -ladvapi32 -lole32 -lshell32
+
+all: $(B)/urlmagic4.dll $(B)/urlmagic4tab.dll $(B)/setup.exe
 
 $(B):
 	mkdir -p $@
 
 # version stamped into the DLLs' VERSIONINFO (from package.json, bumped by Changesets)
 $(B)/version.h: package.json | $(B)
-	printf '#define UM_VERSION_STR "%s"\n#define UM_VERSION_NUM %s\n' '$(VERSION)' '$(VERSION_NUM)' > $@
+	printf '#define UM_VERSION_STR "%s"\n#define UM_VERSION_WSTR L"%s"\n#define UM_VERSION_NUM %s\n' '$(VERSION)' '$(VERSION)' '$(VERSION_NUM)' > $@
 
 $(B)/urlmagic4tab.dll: $(TAB_OBJS) src/tab/tab.def
 	$(CC) $(LDFLAGS) -o $@ $(TAB_OBJS) src/tab/tab.def $(TAB_LIBS)
 	@if i686-w64-mingw32-objdump -d $@ | grep -qE '\bcmov|\bf(u)?comi'; then \
 	  echo "error: $@ uses P6-only instructions"; rm -f $@; exit 1; fi
+
+$(B)/urlmagic4.dll: $(FILTER_OBJS) src/filter/filter.def
+	$(CC) $(LDFLAGS) -o $@ $(FILTER_OBJS) src/filter/filter.def $(FILTER_LIBS)
+	@if i686-w64-mingw32-objdump -d $@ | grep -qE '\bcmov|\bf(u)?comi'; then \
+	  echo "error: $@ uses P6-only instructions"; rm -f $@; exit 1; fi
+
+$(B)/filter.o: src/filter/filter.c src/common/settings.h src/engine/rewrite.h $(B)/version.h | $(B)
+	$(CC) $(CFLAGS) -I $(B) -c -o $@ $<
+$(B)/filter.res.o: src/filter/filter.rc $(B)/version.h | $(B)
+	$(WINDRES) -O coff -I $(B) -o $@ $<
+$(B)/rewrite.o: src/engine/rewrite.c src/engine/rewrite.h | $(B)
+	$(CC) $(CFLAGS) -Ithird_party/pcre2/src $(PCRE2_DEFS) -c -o $@ $<
+$(B)/pcre2/%.o: third_party/pcre2/src/%.c | $(B)
+	@mkdir -p $(B)/pcre2
+	$(CC) $(CFLAGS) -w -Ithird_party/pcre2/src $(PCRE2_DEFS) -c -o $@ $<
+
+$(B)/setup.exe: $(SETUP_OBJS)
+	$(CC) -nostdlib -s -Wl,-e,_start@0 -Wl,--subsystem,console:4.0 \
+	  -Wl,--major-os-version,4,--minor-os-version,0 \
+	  -Wl,--disable-dynamicbase,--disable-nxcompat -o $@ $(SETUP_OBJS) $(SETUP_LIBS)
+	@if i686-w64-mingw32-objdump -d $@ | grep -qE '\bcmov|\bf(u)?comi'; then \
+	  echo "error: $@ uses P6-only instructions"; rm -f $@; exit 1; fi
+$(B)/setup.o: src/setup/setup.c $(B)/version.h | $(B)
+	$(CC) $(CFLAGS) -I $(B) -c -o $@ $<
+$(B)/setup.res.o: src/setup/setup.rc res/urlmagic4.ico $(B)/version.h | $(B)
+	$(WINDRES) -O coff -I $(B) -o $@ $<
 
 $(B)/tab.o: src/tab/tab.c src/tab/resource.h src/common/settings.h | $(B)
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -51,13 +88,11 @@ $(B)/nocrt.o: src/common/nocrt.c | $(B)
 dist: all
 	rm -rf $(B)/dist $(B)/urlmagic4-$(VERSION).zip
 	mkdir -p $(B)/dist
-	cp $(B)/*.dll README.md LICENSE CHANGELOG.md $(B)/dist/
+	cp $(B)/*.dll $(B)/setup.exe README.md LICENSE CHANGELOG.md $(B)/dist/
 	cd $(B)/dist && python3 -m zipfile -c ../urlmagic4-$(VERSION).zip *
 
 # ---- native tests of the rewrite engine (gcc + libc on Linux)
 HOSTCC     ?= gcc
-PCRE2_SRC   = $(wildcard third_party/pcre2/src/*.c)
-PCRE2_DEFS  = -DHAVE_CONFIG_H -DPCRE2_CODE_UNIT_WIDTH=8 -DPCRE2_STATIC -DMATCH_LIMIT=200000 -DHEAP_LIMIT=8192
 TEST_FLAGS  = -O1 -g -std=c99 -Wall -Wextra -D_DEFAULT_SOURCE -Ithird_party/pcre2/src $(PCRE2_DEFS)
 
 $(B)/test_engine: tests/test_engine.c src/engine/rewrite.c src/engine/rewrite.h $(PCRE2_SRC) | $(B)
@@ -67,7 +102,7 @@ test: $(B)/test_engine
 	$(B)/test_engine
 
 install: all
-	install -m 0644 $(B)/urlmagic4tab.dll $(DEST)/
+	install -m 0644 $(B)/urlmagic4.dll $(B)/urlmagic4tab.dll $(B)/setup.exe README.md LICENSE CHANGELOG.md $(DEST)/
 
 clean:
 	rm -rf $(B)

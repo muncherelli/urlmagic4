@@ -39,7 +39,7 @@ RewriteRule ^(.*)$ index.cfm?page=$1 [L,QSA]
 
 | File | Where | Applies to |
 |---|---|---|
-| Server | `urlmagic4.conf` **or** `httpd.ini` in the folder holding `urlmagic4.dll` | every site, runs first |
+| Server (later) | `urlmagic4.conf` **or** `httpd.ini` in the folder holding `urlmagic4.dll` | every site, runs first |
 | Site | `.htaccess` **or** `httpd.ini` in the site's home directory (physical root) | that site |
 
 * The file name picks the format: `.htaccess` and `urlmagic4.conf` are Apache style,
@@ -49,8 +49,8 @@ RewriteRule ^(.*)$ index.cfm?page=$1 [L,QSA]
   warning is logged.
 * Apache style: `#` starts a comment; blank lines ignored; a trailing `\` continues a line.
 * A file is re-read when it changes (checked at most once per second per file); no restart.
-* Errors are written to the Windows Application event log (source `urlmagic4`) with file and
-  line. A bad line is skipped; the rest of the file still loads.
+* Errors are written to `urlmagic4.log` next to the DLL, with file and line (rotated at 1 MB
+  to `urlmagic4.log.old`). A bad line is skipped; the rest of the file still loads.
 * The filter always refuses requests for `.htaccess`, `urlmagic4.conf`, `httpd.ini` and
   `httpd.parse.errors` (any folder, any case) with 403, so rule files can't be downloaded.
 * v1 reads `.htaccess` only in the site root; per-folder `.htaccess` files are later.
@@ -60,12 +60,18 @@ RewriteRule ^(.*)$ index.cfm?page=$1 [L,QSA]
 IIS runs filters as LocalSystem, which has no network credentials. For a site whose home
 directory is a UNC share (e.g. a dev site served from Samba):
 
-* its `.htaccess` can't be read there. Server-file directive (urlmagic4 extension):
-  `SiteConfig <SiteID|"Site name"> <local path to a .htaccess or httpd.ini>`.
+* its `.htaccess` can't be read there: keep the rules on the server's disk and pick that file
+  in the site's **URL Magic 4** tab (*In this file*).
 * `-f` / `-d` tests can't see its files and always report "missing". Exclude static folders
   by pattern instead (`RewriteRule ^assets/ - [L]`).
 
-Server-file only (urlmagic4 extensions): `SiteConfig`, `DisableSite <SiteID|"Site name">`.
+### Per-site settings (URL Magic 4 tab)
+
+Each web site's Properties dialog in Internet Service Manager has a **URL Magic 4** tab:
+rewriting on/off, rules format (automatic by file name, `.htaccess`, `httpd.ini`), and rules
+file (the site's home directory, or any file). Stored in
+`HKLM\SOFTWARE\urlmagic4\Sites\W3SVC\<site number>` (see `src/common/settings.h`); the filter
+re-reads it every few seconds.
 
 ## 4. Directives (v1)
 
@@ -88,9 +94,10 @@ lines and reads what's inside, so copied files still load).
   The server file sees the same (with a leading `/`, as Apache server context).
 * Patterns are PCRE (Perl-compatible) regexes, not anchored unless you write `^`/`$`.
   A leading `!` negates the pattern (then no `$N` groups).
-* Rules run top to bottom: server file first, then the site's `.htaccess`.
-* A rewritten URL that stays in the same site is processed again from the top of
-  `.htaccess` (as Apache per-directory), up to 10 rounds; then 500. `[END]` stops for good.
+* Rules run once, top to bottom: server file first (later), then the site's `.htaccess`.
+  Unlike Apache's per-directory mode, a rewritten URL is **not** run through the rules again,
+  so `[L]` really is the last rule and front-controller rules can't loop, even where `-f`
+  can't see the files (network shares). `[END]` behaves like `[L]`.
 
 ### Variables in `TestString` and `Substitution`
 
