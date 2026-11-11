@@ -1,5 +1,9 @@
 #include <windows.h>
 #include "version.h"
+#include "payload.h"
+
+/* the files to install (absolute paths, written by the Makefile) */
+#include "payload.rc"
 
 1 ICON "../../res/urlmagic4.ico"
 

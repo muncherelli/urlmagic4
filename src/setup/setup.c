@@ -6,7 +6,8 @@
  *   urlmagic4-v4.0.0 uninstall          remove (keeps each site's settings)
  *   urlmagic4-v4.0.0 uninstall /purge   remove, including each site's settings
  *
- * It copies itself into the install folder too, so it can uninstall later.
+ * Everything it installs is inside it (RCDATA resources, see payload.h), so this one file is
+ * all you need. It also copies itself into the install folder, to uninstall later.
  *
  * Installing: stops the WWW service, copies urlmagic4.dll and urlmagic4tab.dll, registers
  * the URL Magic 4 tab, adds urlmagic4 to IIS's global ISAPI filters, starts the WWW service.
@@ -20,6 +21,7 @@
 #include <iiscnfg.h>
 
 #include "version.h"
+#include "payload.h"
 
 static const GUID CLSID_UmMSAdminBase =
     {0xa9e69610, 0xb80d, 0x11d0, {0xb9, 0xb9, 0x00, 0xa0, 0xc9, 0x22, 0xe7, 0x50}};
@@ -28,8 +30,10 @@ static const GUID IID_UmIMSAdminBase =
 
 static const WCHAR FILTER_NAME[] = L"urlmagic4";
 static const WCHAR FILTERS_KEY[] = L"/LM/W3SVC/Filters";
+/* installed files, in the order of their resource IDs (payload.h) */
 static const WCHAR *FILES[] = { L"urlmagic4.dll", L"urlmagic4tab.dll", L"README.md", L"LICENSE",
                                 L"CHANGELOG.md", NULL };
+static const int FILE_IDS[] = { ID_FILTER_DLL, ID_TAB_DLL, ID_README, ID_LICENSE, ID_CHANGELOG };
 
 static HANDLE g_out;
 static WCHAR g_self[MAX_PATH];         /* this program's file name, e.g. urlmagic4-v4.0.0.exe */
@@ -322,6 +326,25 @@ static void record_dir(const WCHAR *dir)
     }
 }
 
+/* Write one embedded file to path; returns 0 or a Win32 error code. */
+static DWORD extract(int id, const WCHAR *path)
+{
+    HRSRC r = FindResourceW(NULL, MAKEINTRESOURCEW(id), (LPCWSTR)RT_RCDATA);
+    HGLOBAL g;
+    const void *data;
+    DWORD size, w, err = 0;
+    HANDLE f;
+
+    if (!r || !(g = LoadResource(NULL, r)) || !(data = LockResource(g))) return ERROR_RESOURCE_DATA_NOT_FOUND;
+    size = SizeofResource(NULL, r);
+    f = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) return GetLastError();
+    if (!WriteFile(f, data, size, &w, NULL) || w != size) err = GetLastError() ? GetLastError() : ERROR_WRITE_FAULT;
+    CloseHandle(f);
+    if (err) DeleteFileW(path);
+    return err;
+}
+
 static int install(const WCHAR *dir)
 {
     WCHAR src[MAX_PATH], from[MAX_PATH], to[MAX_PATH];
@@ -329,11 +352,6 @@ static int install(const WCHAR *dir)
     int i;
 
     dir_of_exe(src);
-    join(from, src, L"urlmagic4.dll");
-    if (GetFileAttributesW(from) == 0xFFFFFFFF) {
-        out("urlmagic4.dll isn't next to this program. Unzip the whole release and run it from there.\r\n");
-        return 1;
-    }
     out("Installing urlmagic4 " UM_VERSION_STR " to ");
     outw(dir);
     out("\r\n\r\n");
@@ -342,15 +360,13 @@ static int install(const WCHAR *dir)
     if (!www(FALSE, &running)) return 1;
     ok();
 
-    step("Copying files");
+    step("Unpacking files");
     CreateDirectoryW(dir, NULL);
     for (i = 0; FILES[i]; i++) {
-        join(from, src, FILES[i]);
+        DWORD e;
         join(to, dir, FILES[i]);
-        if (GetFileAttributesW(from) == 0xFFFFFFFF) continue;          /* docs are optional */
-        if (lstrcmpiW(from, to) != 0 && !CopyFileW(from, to, FALSE)) {
-            DWORD e = GetLastError();
-            fail("can't copy a file", e);
+        if ((e = extract(FILE_IDS[i], to)) != 0) {
+            fail("can't write a file", e);
             out("    ");
             outw(to);
             out(e == ERROR_SHARING_VIOLATION ? "\r\n    is in use: close Internet Service Manager and run setup again.\r\n" : "\r\n");

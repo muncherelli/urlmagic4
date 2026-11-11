@@ -2,7 +2,7 @@
 #   make            build/urlmagic4.dll (the filter), build/urlmagic4tab.dll (the tab) and
 #                   build/urlmagic4-v<version>.exe (the installer)
 #   make test       run the rewrite engine's tests natively
-#   make dist       build/urlmagic4-v<version>.zip (everything above + README, LICENSE, CHANGELOG)
+#   make dist       build/urlmagic4-v<version>.zip (the installer + README, LICENSE, CHANGELOG)
 #   make install    copy the DLLs to $(DEST) (default ~/Development/files)
 comma := ,
 VERSION := $(strip $(shell cat version.txt))
@@ -74,10 +74,16 @@ $(B)/$(SETUP_EXE): $(SETUP_OBJS)
 	  -Wl,--disable-dynamicbase,--disable-nxcompat -o $@ $(SETUP_OBJS) $(SETUP_LIBS)
 	@if i686-w64-mingw32-objdump -d $@ | grep -qE '\bcmov|\bf(u)?comi'; then \
 	  echo "error: $@ uses P6-only instructions"; rm -f $@; exit 1; fi
-$(B)/setup.o: src/setup/setup.c $(B)/version.h | $(B)
+$(B)/setup.o: src/setup/setup.c src/setup/payload.h $(B)/version.h | $(B)
 	$(CC) $(CFLAGS) -I $(B) -c -o $@ $<
-$(B)/setup.res.o: src/setup/setup.rc res/urlmagic4.ico $(B)/version.h | $(B)
-	$(WINDRES) -O coff -I $(B) -o $@ $<
+# the installer carries everything it installs
+$(B)/payload.rc: $(B)/urlmagic4.dll $(B)/urlmagic4tab.dll README.md LICENSE CHANGELOG.md | $(B)
+	printf '%s RCDATA "%s"\n' \
+	  ID_FILTER_DLL '$(abspath $(B)/urlmagic4.dll)' ID_TAB_DLL '$(abspath $(B)/urlmagic4tab.dll)' \
+	  ID_README '$(abspath README.md)' ID_LICENSE '$(abspath LICENSE)' \
+	  ID_CHANGELOG '$(abspath CHANGELOG.md)' > $@
+$(B)/setup.res.o: src/setup/setup.rc src/setup/payload.h res/urlmagic4.ico $(B)/version.h $(B)/payload.rc | $(B)
+	$(WINDRES) -O coff -I $(B) -I src/setup -o $@ $<
 
 $(B)/tab.o: src/tab/tab.c src/tab/resource.h src/common/settings.h | $(B)
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -91,7 +97,7 @@ $(B)/nocrt.o: src/common/nocrt.c | $(B)
 dist: all
 	rm -rf $(B)/dist $(B)/urlmagic4-v*.zip
 	mkdir -p $(B)/dist
-	cp $(B)/*.dll $(B)/$(SETUP_EXE) README.md LICENSE CHANGELOG.md $(B)/dist/
+	cp $(B)/$(SETUP_EXE) README.md LICENSE CHANGELOG.md $(B)/dist/
 	cd $(B)/dist && python3 -m zipfile -c ../urlmagic4-v$(VERSION).zip *
 
 # ---- native tests of the rewrite engine (gcc + libc on Linux)
@@ -106,7 +112,8 @@ test: $(B)/test_engine
 
 install: all
 	rm -f $(DEST)/setup.exe $(DEST)/urlmagic4-v*.exe
-	install -m 0644 $(B)/urlmagic4.dll $(B)/urlmagic4tab.dll $(B)/$(SETUP_EXE) README.md LICENSE CHANGELOG.md $(DEST)/
+	rm -f $(DEST)/urlmagic4.dll $(DEST)/urlmagic4tab.dll $(DEST)/README.md $(DEST)/LICENSE $(DEST)/CHANGELOG.md
+	install -m 0644 $(B)/$(SETUP_EXE) $(DEST)/
 
 clean:
 	rm -rf $(B)

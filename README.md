@@ -34,16 +34,16 @@ their trademark.
 
 Requirements: Windows NT 4.0 (SP6a recommended) with IIS 4.0, any 486 or later CPU.
 
-1. Download `urlmagic4-v<version>.zip` from the
-   [releases](https://github.com/muncherelli/urlmagic4/releases), unzip it on the server.
-2. Close Internet Service Manager, then from a command prompt in the unzipped folder run the
-   installer, e.g.:
+1. Download the installer `urlmagic4-v<version>.exe` from the
+   [releases](https://github.com/muncherelli/urlmagic4/releases) and copy it to the server.
+   It's a single file: both DLLs and the docs are inside it.
+2. Close Internet Service Manager, then run it from a command prompt, e.g.:
 
    ```
    urlmagic4-v4.0.0
    ```
 
-   It's a console program. It stops the WWW service, copies everything (itself included) to
+   It's a console program. It stops the WWW service, unpacks everything (and a copy of itself) to
    `%SystemDrive%\urlmagic4`, registers the URL Magic 4 tab, adds urlmagic4 to IIS's ISAPI
    filters and starts the WWW service again, printing each step.
    (`urlmagic4-v4.0.0 install D:\some\folder` installs elsewhere.)

@@ -21,4 +21,6 @@ jobs:
       - uses: actions/upload-artifact@v6
         with:
           name: urlmagic4
-          path: build/urlmagic4-v*.zip
+          path: |
+            build/urlmagic4-v*.exe
+            build/urlmagic4-v*.zip
