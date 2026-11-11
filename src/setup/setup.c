@@ -253,6 +253,7 @@ static void banner(void)
 
 static BOOL g_tui;
 static HANDLE g_in;
+static char g_rawch;                   /* the last character typed, not lowercased */
 static int g_row, g_cur_row = -1, g_total = 1, g_done;
 static char g_msgs[MAX_MSGS][100];
 static WORD g_msg_fg[MAX_MSGS];
@@ -281,7 +282,6 @@ static void fill(int x, int y, WORD attr, char ch, int n)
     FillConsoleOutputAttribute(g_out, attr, (DWORD)n, c, &w);
 }
 
-static void put_center(int y, WORD attr, const char *t) { put((SCR_W - lstrlenA(t)) / 2, y, attr, t); }
 
 static void clear_rows(int y0, int y1)
 {
@@ -339,7 +339,8 @@ static BOOL tui_begin(void)
     return TRUE;
 }
 
-/* wait for a key: lowercase letter, 13 = Enter, 27 = Esc or F3, 3 = Ctrl+C */
+/* wait for a key: a character (letters lowercased), 13 = Enter, 8 = Backspace, 27 = Esc or F3,
+   3 = Ctrl+C */
 static int key(void)
 {
     INPUT_RECORD ir;
@@ -350,10 +351,12 @@ static int key(void)
             WORD vk = ir.Event.KeyEvent.wVirtualKeyCode;
             char ch = ir.Event.KeyEvent.uChar.AsciiChar;
             if (vk == VK_RETURN) return 13;
+            if (vk == VK_BACK) return 8;
             if (ch == 3) return 3;                                        /* Ctrl+C */
             if (vk == VK_ESCAPE || vk == VK_F3) return 27;
+            g_rawch = ch;
             if (ch >= 'A' && ch <= 'Z') ch = (char)(ch + 32);
-            if (ch > ' ') return ch;
+            if (ch >= ' ') return ch;
         }
     }
 }
@@ -1216,16 +1219,6 @@ static void get_sysinfo(sysinfo *si)
 
 enum { OK_ = 0, WARN_ = 1, FAIL_ = 2 };
 
-/* one cell of the two-column system check: label, value, result tag at tag_x */
-static void check_cell(int x, int y, int tag_x, const char *label, const char *val, int level)
-{
-    put(x, y, A_TEXT, label);
-    put(x + 10, y, A_BRIGHT, val);
-    if (level == OK_) tui_tag(tag_x, y, " OK ", C_GREEN);
-    else if (level == WARN_) tui_tag(tag_x, y, "WARN", C_YELLOW);
-    else if (level == FAIL_) tui_tag(tag_x, y, "FAIL", C_RED);
-}
-
 /* compare "a.b.c" version strings: <0, 0, >0 */
 static int vercmp(const WCHAR *a, const WCHAR *b)
 {
@@ -1241,13 +1234,64 @@ static int vercmp(const WCHAR *a, const WCHAR *b)
     return 0;
 }
 
-#define MSG_ROW 19                           /* two message rows, then blank rows to the key bar */
-
-/* the splash screen; returns 'i' (install), 'u' (uninstall) or 'q' */
-static int splash(const sysinfo *si, BOOL *purge, BOOL remove)
+/* one line of the system check: label, value, result tag */
+static void check_line(int y, const char *label, const char *val, int level)
 {
-    char v[MAX_PATH + 40], d[MAX_PATH];
-    const char *problem = NULL, *advice = NULL;
+    put(STEP_X + 2, y, A_TEXT, label);
+    put(STEP_X + 18, y, A_BRIGHT, val);
+    if (level == OK_) tui_tag(TAG_X, y, " OK ", C_GREEN);
+    else if (level == WARN_) tui_tag(TAG_X, y, "WARN", C_YELLOW);
+    else if (level == FAIL_) tui_tag(TAG_X, y, "FAIL", C_RED);
+}
+
+#define CHECK_ROW 12                         /* "System check" and its four lines */
+#define MSG_ROW   18                         /* install folder / message, warning, advice */
+#define FIELD_X   (STEP_X + 13)
+#define FIELD_W   (TAG_X + 6 - FIELD_X)      /* the folder field ends where the tags end */
+#define A_FIELD   ((WORD)0x70)               /* black on grey, like a text box */
+
+static void cursor(BOOL on, int x, int y)
+{
+    CONSOLE_CURSOR_INFO cur;
+    COORD c;
+    cur.dwSize = 25;
+    cur.bVisible = on;
+    SetConsoleCursorInfo(g_out, &cur);
+    if (on) { c.X = (SHORT)x; c.Y = (SHORT)y; SetConsoleCursorPosition(g_out, c); }
+}
+
+/* the install-folder text box; shows the end of the path if it's longer than the box */
+static void draw_field(const char *path)
+{
+    int n = lstrlenA(path), shown = n > FIELD_W - 1 ? FIELD_W - 1 : n;
+    fill(FIELD_X, MSG_ROW, A_FIELD, ' ', FIELD_W);
+    put(FIELD_X, MSG_ROW, A_FIELD, path + n - shown);
+    cursor(TRUE, FIELD_X + shown, MSG_ROW);
+}
+
+/* a usable install folder: a full path on a local hard disk. NULL if fine, else why not. */
+static const char *check_dir(const char *path, WCHAR *out)
+{
+    WCHAR w[MAX_PATH], root[4];
+    int n;
+    if (!(((path[0] | 32) >= 'a' && (path[0] | 32) <= 'z') && path[1] == ':' && path[2] == '\\'))
+        return "Type a full path, like C:\\urlmagic4.";
+    MultiByteToWideChar(CP_OEMCP, 0, path, -1, w, MAX_PATH);
+    if (!GetFullPathNameW(w, MAX_PATH, out, NULL)) return "That isn't a valid folder name.";
+    n = lstrlenW(out);
+    while (n > 3 && out[n - 1] == L'\\') out[--n] = 0;
+    if (n <= 3) return "Choose a folder, not the root of a drive.";
+    root[0] = out[0]; root[1] = L':'; root[2] = L'\\'; root[3] = 0;
+    if (GetDriveTypeW(root) != DRIVE_FIXED)
+        return "Choose a folder on a local hard disk (IIS loads the filter from there).";
+    return NULL;
+}
+
+/* the splash screen; returns 'i' (install into dir), 'u' (uninstall) or 'q' */
+static int splash(const sysinfo *si, BOOL *purge, BOOL remove, WCHAR *dir)
+{
+    char v[MAX_PATH + 40], d[MAX_PATH], path[MAX_PATH];
+    const char *problem = NULL, *advice = NULL, *err = NULL;
     const char *quit = remove ? "ESC/CTRL+C=Cancel" : "ESC/CTRL+C=Quit";
     char keys[100];
     int lw, ls, li, k;
@@ -1262,19 +1306,17 @@ static int splash(const sysinfo *si, BOOL *purge, BOOL remove)
         static const char url[] = "github.com/muncherelli/urlmagic4";
         put(7 + 16 + 3 + LOGO_W - lstrlenA(url), 10, ON_BLUE(C_CYAN), url);
     }
-    put_center(12, ON_BLUE(C_YELLOW), "The missing IIS tab");
-    put_center(13, A_TEXT, "URL rewriting for IIS 4.0 on Windows NT 4.0");
 
-    put(STEP_X, 15, A_BRIGHT, "System check");
-    fill(STEP_X + 13, 15, ON_BLUE(C_DCYAN), (char)0xC4, 76 - (STEP_X + 13));
+    put(STEP_X, CHECK_ROW, A_BRIGHT, "System check");
+    fill(STEP_X + 13, CHECK_ROW, ON_BLUE(C_DCYAN), (char)0xC4, TAG_X + 6 - (STEP_X + 13));
 
-    /* Windows + service pack, one cell */
+    /* Windows and its service pack */
     if (!si->nt) { lw = FAIL_; lstrcpyA(v, "Windows 95/98/Me"); problem = "urlmagic needs Windows NT 4.0."; }
     else {
-        char sp[16];
-        if (si->sp) wsprintfA(sp, " SP%d%s", si->sp, si->sp6a ? "a" : "");
-        else sp[0] = 0;
-        wsprintfA(v, "NT %lu.%lu%s (build %lu)", si->major, si->minor, sp, si->build);
+        char sp[24];
+        if (si->sp) wsprintfA(sp, ", Service Pack %d%s", si->sp, si->sp6a ? "a" : "");
+        else lstrcpyA(sp, ", no service pack");
+        wsprintfA(v, "Windows NT %lu.%lu%s (build %lu)", si->major, si->minor, sp, si->build);
         lw = si->major == 4 ? OK_ : WARN_;
         if (lw == WARN_) advice = "Not Windows NT 4.0: urlmagic is untested here.";
         ls = OK_;
@@ -1284,26 +1326,29 @@ static int splash(const sysinfo *si, BOOL *purge, BOOL remove)
         }
         if (ls > lw) lw = ls;
     }
-    check_cell(STEP_X, 16, 40, "Windows", v, lw);
+    check_line(CHECK_ROW + 1, "Windows", v, lw);
     /* IIS */
-    if (!si->iis_major) { li = FAIL_; lstrcpyA(v, "missing"); if (!problem) problem = "Install IIS 4.0 from the NT 4.0 Option Pack first."; }
+    if (!si->iis_major) { li = FAIL_; lstrcpyA(v, "Not installed"); if (!problem) problem = "Install IIS 4.0 from the NT 4.0 Option Pack first."; }
     else {
-        wsprintfA(v, "%lu.%lu", si->iis_major, si->iis_minor);
+        wsprintfA(v, "IIS %lu.%lu", si->iis_major, si->iis_minor);
         li = si->iis_major == 4 ? OK_ : WARN_;
         if (li == WARN_ && !advice) advice = "Not IIS 4.0: urlmagic is untested here.";
     }
-    check_cell(48, 16, TAG_X, "IIS", v, li);
+    check_line(CHECK_ROW + 2, "Web server", v, li);
     /* administrator */
-    check_cell(STEP_X, 17, 40, "Admin", si->admin ? "yes" : "no", si->admin ? OK_ : FAIL_);
+    check_line(CHECK_ROW + 3, "Administrator", si->admin ? "Yes" : "No", si->admin ? OK_ : FAIL_);
     if (!si->admin && !problem) problem = "Log on as an Administrator to install urlmagic.";
     /* urlmagic */
     if (si->installed) {
         WideCharToMultiByte(CP_OEMCP, 0, si->dir, -1, d, MAX_PATH, NULL, NULL);
         WideCharToMultiByte(CP_OEMCP, 0, si->ver[0] ? si->ver : L"?", -1, v, 32, NULL, NULL);
+        lstrcatA(v, " in ");
+        lstrcatA(v, d);
+        lstrcpynW(dir, si->dir, MAX_PATH);
     } else {
-        lstrcpyA(v, "not installed");
+        lstrcpyA(v, "Not installed");
     }
-    check_cell(48, 17, TAG_X, "urlmagic", v, -1);
+    check_line(CHECK_ROW + 4, "urlmagic", v, -1);
 
     if (remove && !si->installed && !problem) problem = "urlmagic isn't installed.";
     if (problem) {
@@ -1314,21 +1359,50 @@ static int splash(const sysinfo *si, BOOL *purge, BOOL remove)
         return 'q';
     }
 
+    /* a new install: the folder is typed in a text box */
+    if (!si->installed && !remove) {
+        WCHAR dflt[MAX_PATH];
+        int n;
+        default_dir(dflt);
+        WideCharToMultiByte(CP_OEMCP, 0, dflt, -1, path, MAX_PATH, NULL, NULL);
+        for (;;) {
+            clear_rows(MSG_ROW, SCR_H - 2);
+            put(STEP_X, MSG_ROW, A_BRIGHT, "Install to");
+            put(STEP_X, MSG_ROW + 2, ON_BLUE(C_YELLOW),
+                "Web sites go offline for a few seconds while the WWW service restarts.");
+            if (err) put(STEP_X, MSG_ROW + 3, ON_BLUE(C_RED), err);
+            else if (advice) put(STEP_X, MSG_ROW + 3, ON_BLUE(C_YELLOW), advice);
+            wsprintfA(keys, "ENTER=Install   %s", quit);
+            keybar(keys);
+            draw_field(path);
+            for (;;) {
+                k = key();
+                n = lstrlenA(path);
+                if (k == 27 || k == 3) { cursor(FALSE, 0, 0); return 'q'; }
+                if (k == 13) break;
+                if (k == 8) { if (n) path[n - 1] = 0; }
+                else if (k >= ' ' && n < MAX_PATH - 1) {
+                    path[n] = g_rawch;              /* as typed, capitals included */
+                    path[n + 1] = 0;
+                }
+                draw_field(path);
+            }
+            cursor(FALSE, 0, 0);
+            err = check_dir(path, dir);
+            if (!err) return 'i';
+        }
+    }
+
     for (;;) {
         clear_rows(MSG_ROW, SCR_H - 2);
         if (remove) {
             wsprintfA(v, "Setup will remove urlmagic from %s.", d);
-        } else if (si->installed) {
+        } else {
             char have[32];
             WideCharToMultiByte(CP_OEMCP, 0, si->ver[0] ? si->ver : L"?", -1, have, sizeof have, NULL, NULL);
             if (cmp == 0) wsprintfA(v, "Setup will reinstall urlmagic %s in %s.", UM_VERSION_STR, d);
             else if (cmp < 0) wsprintfA(v, "Setup will upgrade urlmagic %s to %s in %s.", have, UM_VERSION_STR, d);
             else wsprintfA(v, "Setup will replace the newer urlmagic %s with %s in %s.", have, UM_VERSION_STR, d);
-        } else {
-            WCHAR dflt[MAX_PATH];
-            default_dir(dflt);
-            WideCharToMultiByte(CP_OEMCP, 0, dflt, -1, d, MAX_PATH, NULL, NULL);
-            wsprintfA(v, "Setup will install urlmagic %s to %s.", UM_VERSION_STR, d);
         }
         put(STEP_X, MSG_ROW, A_BRIGHT, v);
         put(STEP_X, MSG_ROW + 1, ON_BLUE(C_YELLOW),
@@ -1336,10 +1410,9 @@ static int splash(const sysinfo *si, BOOL *purge, BOOL remove)
         if (advice && !remove) put(STEP_X, MSG_ROW + 2, ON_BLUE(C_YELLOW), advice);
 
         if (remove) wsprintfA(keys, "ENTER=Uninstall   %s", quit);
-        else if (si->installed)
+        else
             wsprintfA(keys, "ENTER=%s   U=Uninstall   %s",
                       cmp == 0 ? "Reinstall" : cmp < 0 ? "Upgrade" : "Downgrade", quit);
-        else wsprintfA(keys, "ENTER=Install   %s", quit);
         keybar(keys);
         k = key();
         if (k == 27 || k == 3) return 'q';
@@ -1347,7 +1420,7 @@ static int splash(const sysinfo *si, BOOL *purge, BOOL remove)
             if (!remove) return 'i';
             k = 'u';
         }
-        if (k == 'u' && si->installed) {
+        if (k == 'u') {
             clear_rows(MSG_ROW, SCR_H - 2);
             put(STEP_X, MSG_ROW, A_BRIGHT, "Also delete every web site's URL Magic settings?");
             put(STEP_X, MSG_ROW + 1, A_TEXT, "Keep them if you might install urlmagic again.");
@@ -1403,10 +1476,9 @@ static int tui_main(BOOL remove)
     int action, rc;
 
     get_sysinfo(&si);
-    action = splash(&si, &purge, remove);
+    action = splash(&si, &purge, remove, dir);
     if (action == 'q') return 0;
     if (action == 'i') {
-        if (si.installed) lstrcpynW(dir, si.dir, MAX_PATH); else default_dir(dir);
         g_total = 5;
         rc = install(dir);
     } else {

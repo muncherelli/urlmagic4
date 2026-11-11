@@ -40,8 +40,9 @@ Requirements: Windows NT 4.0 (SP6a recommended) with IIS 4.0, any 486 or later C
    It's a single file: both DLLs and the docs are inside it.
 2. Close Internet Service Manager and double-click it. Setup opens full-screen, in the style
    of NT's own text-mode Setup: it checks Windows NT (version, build, service pack), IIS and
-   administrator rights, then installs with a progress bar: stop the WWW service, unpack
-   everything (and a copy of itself) to `%SystemDrive%\urlmagic4`, register the URL Magic tab,
+   administrator rights, asks where to install (default `%SystemDrive%\urlmagic4`), then
+   installs with a progress bar: stop the WWW service, unpack everything (and a copy of
+   itself) to that folder, register the URL Magic tab,
    add urlmagic4 to IIS's ISAPI filters, start the WWW service. It also appears in
    **Control Panel → Add/Remove Programs**. From a command prompt (no prompts, for scripts):
    `urlmagic4.0.0 install [folder]`.
