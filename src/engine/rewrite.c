@@ -775,6 +775,9 @@ typedef struct {
     const char *path;           /* current, decoded, with leading "/" */
     size_t plen;
     const char *query;          /* current query string (no "?") */
+    int path_nl;                /* path contains a newline (no fast-path matching then) */
+    const char *ft_path;        /* the last -f/-d test in this request, and its answer */
+    int ft_type;
     int failed;
 } state;
 
@@ -822,10 +825,10 @@ static int fast_match(const fastpat *f, const char *s, size_t len, caps *c)
 
 /* match re (or its fast form) against s (len bytes); fills c on success.
    1 = match, 0 = no match, -1 = error */
-static int run(state *st, pcre2_code *re, const fastpat *fp, const char *s, size_t len, caps *c)
+static int run(state *st, pcre2_code *re, const fastpat *fp, const char *s, size_t len, int nl, caps *c)
 {
     pcre2_match_data *md = st->a->md;
-    if (fp && fp->kind != FP_NONE && !memchr(s, '\n', len)
+    if (fp && fp->kind != FP_NONE && !(nl < 0 ? memchr(s, '\n', len) != NULL : nl)
 #ifdef UM_NO_FASTPATH
         && 0
 #endif
@@ -906,6 +909,17 @@ static char *concat(state *st, const char *a, const char *b, const char *c)
 
 static int cmp(const char *a, const char *b) { return strcmp(a, b); }
 
+/* -f / -d: what is at fspath. "!-f" then "!-d" on the same path is the usual pair, so the
+   last answer in this request is kept (fspath must stay in the scratch). */
+static int file_type(state *st, const char *fspath)
+{
+    if (!st->env || !st->env->file_type) return UM_FT_NONE;
+    if (st->ft_path && strcmp(st->ft_path, fspath) == 0) return st->ft_type;
+    st->ft_type = st->env->file_type(st->env->ctx, fspath);
+    st->ft_path = fspath;
+    return st->ft_type;
+}
+
 /* evaluate one condition; updates *last (the %N captures) when a regex matches */
 static int eval_cond(state *st, const cond *c, const caps *rc, caps *last)
 {
@@ -915,14 +929,14 @@ static int eval_cond(state *st, const cond *c, const caps *rc, caps *last)
     int ok = 0, keep = 0;
     if (!v) { st->failed = 1; return 0; }
     switch (c->kind) {
-    case C_FILE: ok = st->env && st->env->file_type && st->env->file_type(st->env->ctx, v) == UM_FT_FILE; break;
-    case C_DIR:  ok = st->env && st->env->file_type && st->env->file_type(st->env->ctx, v) == UM_FT_DIR; break;
+    case C_FILE: ok = file_type(st, v) == UM_FT_FILE; keep = 1; break;   /* keep v for the cache */
+    case C_DIR:  ok = file_type(st, v) == UM_FT_DIR; keep = 1; break;
     case C_EQ:   ok = (c->flags & F_NC) ? ieq(v, c->str) : cmp(v, c->str) == 0; break;
     case C_LT:   ok = cmp(v, c->str) < 0; break;
     case C_GT:   ok = cmp(v, c->str) > 0; break;
     case C_REGEX: {
         caps mc;
-        int r = run(st, c->re, &c->fp, v, n, &mc);
+        int r = run(st, c->re, &c->fp, v, n, -1, &mc);
         ok = r == 1;
         if (ok && !c->negate) { *last = mc; keep = 1; }     /* %N point into v */
         break;
@@ -994,6 +1008,7 @@ int um_apply_s(const um_rules *r, const char *url, const um_env *env, um_scratch
     st.path = url_decode(a, url, plen, NULL);
     if (!st.path) { st.failed = 1; goto done; }
     st.plen = strlen(st.path);  /* a %00 ends the path, for the regexes too */
+    st.path_nl = memchr(st.path, '\n', st.plen) != NULL;
     st.orig_path = st.path;     /* path is replaced, never changed, so this stays put */
 
     for (i = 0; i < r->n; i++) {
@@ -1020,7 +1035,7 @@ int um_apply_s(const um_rules *r, const char *url, const um_env *env, um_scratch
             continue;
         }
         if (ru->type == R_REDIRECTMATCH) {
-            int mm = run(&st, ru->re, &ru->fp, st.path, st.plen, &rc);
+            int mm = run(&st, ru->re, &ru->fp, st.path, st.plen, st.path_nl, &rc);
             if (mm < 0) goto done;
             if (mm == 1) {
                 char *u;
@@ -1040,7 +1055,7 @@ int um_apply_s(const um_rules *r, const char *url, const um_env *env, um_scratch
         {
             /* .htaccess style: matched without the leading slash */
             const char *subject = st.plen ? st.path + 1 : st.path;
-            int mm = run(&st, ru->re, &ru->fp, subject, st.plen ? st.plen - 1 : 0, &rc);
+            int mm = run(&st, ru->re, &ru->fp, subject, st.plen ? st.plen - 1 : 0, st.path_nl, &rc);
             int ok;
             if (mm < 0) goto done;
             ok = ru->negate ? mm == 0 : mm == 1;
@@ -1049,6 +1064,7 @@ int um_apply_s(const um_rules *r, const char *url, const um_env *env, um_scratch
             if (st.failed) goto done;
             if (!ok) {
                 a_rollback(a, m);
+                st.ft_path = NULL;      /* it may point into what was just rolled back */
                 /* a failed rule in a chain skips the rest of the chain */
                 if (ru->flags & F_C)
                     while (i + 1 < r->n && (r->rules[i].flags & F_C)) i++;
@@ -1092,6 +1108,7 @@ int um_apply_s(const um_rules *r, const char *url, const um_env *env, um_scratch
             if (!np || !nq) { st.failed = 1; goto done; }
             st.path = np;
             st.plen = strlen(np);
+            st.path_nl = memchr(np, '\n', st.plen) != NULL;
             st.query = nq;
             changed = 1;
 

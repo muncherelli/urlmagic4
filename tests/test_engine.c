@@ -187,6 +187,13 @@ int main(void)
         um_rules_free(r);
     }
 
+    /* -f answers are reused within a request, but never for a different path (a failed rule's
+       strings are rolled back, so the next path can land at the same address) */
+    check("-f cache: a failed rule, then another path",
+          "RewriteEngine On\nRewriteCond /site/nothing -f\nRewriteRule ^ - [F]\n"
+          "RewriteCond /site/old.htm -f\nRewriteRule ^(.*)$ /found [L]\n", "/x", UM_REWRITE, 0, "/found");
+    check("-f cache: !-f then !-d on the same path", FRONT, "/assets", UM_NONE, 0, NULL);
+
     /* a %00 ends the path for every rule (it can't be used to slip past a deny rule) */
     check("%00 in the path", "RewriteEngine On\nRewriteRule \\.cfm$ - [F]\n", "/x.cfm%00.jpg",
           UM_FORBIDDEN, 403, NULL);
