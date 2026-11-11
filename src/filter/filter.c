@@ -487,8 +487,8 @@ static int env_file_type(void *ctx, const char *fspath)
 /* ---------------------------------------------------------------- responses */
 
 /* Send a whole small response in one piece (headers and body together: two small sends can
-   stall on Nagle + delayed ACK). GET and HEAD over HTTP/1.1 keep the connection open, so a
-   proxy in front can reuse it. */
+   stall on Nagle + delayed ACK). GET and HEAD over HTTP/1.1 without a body keep the
+   connection open, so a proxy in front can reuse it. */
 static DWORD respond(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr,
                      const char *status, const char *location)
 {
@@ -502,6 +502,14 @@ static DWORD respond(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr,
     if (!hdr->GetHeader(pfc, "version", version, &n)) version[0] = 0;
     head = ieq(method, "HEAD");
     keep = (head || ieq(method, "GET")) && ieq(version, "HTTP/1.1");
+    if (keep) {
+        /* a body we didn't read must never be taken for the next request */
+        char v[32];
+        n = sizeof v;
+        if (hdr->GetHeader(pfc, "Content-Length:", v, &n) && !(v[0] == '0' && v[1] == 0)) keep = FALSE;
+        n = sizeof v;
+        if (hdr->GetHeader(pfc, "Transfer-Encoding:", v, &n)) keep = FALSE;
+    }
 
     wsprintfA(body, "<html><head><title>%s</title></head><body><h1>%s</h1></body></html>", status, status);
     buf[0] = 0;
