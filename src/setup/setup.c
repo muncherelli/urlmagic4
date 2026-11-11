@@ -40,12 +40,44 @@ static WCHAR g_self[MAX_PATH];         /* this program's file name, e.g. urlmagi
 static BOOL g_interactive;             /* double-clicked: ask, and wait before closing */
 static int g_errors;
 
-/* ---------------------------------------------------------------- console output */
+/* ---------------------------------------------------------------- console output
+ *
+ * NT 4.0's console has no ANSI escapes, but it has 16 colours (SetConsoleTextAttribute) and
+ * the IBM PC character set (code page 437): box drawing, blocks, bullets. Output that isn't a
+ * console (redirected to a file) gets no colours.
+ */
+
+enum {
+    C_DIM = 8, C_GREY = 7, C_WHITE = 15, C_BLUE = 9, C_GREEN = 10, C_CYAN = 11, C_RED = 12,
+    C_MAGENTA = 13, C_YELLOW = 14, C_DCYAN = 3
+};
+
+static BOOL g_color;
+static WORD g_attr0 = C_GREY;
+static int g_spin = -1;                 /* spinner position, -1 = not spinning */
+static int g_col;                       /* output column, for lining up the step results */
+
+static void color(WORD a)
+{
+    if (g_color) SetConsoleTextAttribute(g_out, a);
+}
 
 static void out(const char *s)
 {
     DWORD w;
+    const char *p;
     WriteFile(g_out, s, (DWORD)lstrlenA(s), &w, NULL);
+    for (p = s; *p; p++) {
+        if (*p == '\n' || *p == '\r') g_col = 0;
+        else if (*p == '\b') { if (g_col) g_col--; }
+        else g_col++;
+    }
+}
+
+static void outc(char c, int n)
+{
+    char buf[2] = { c, 0 };
+    while (n-- > 0) out(buf);
 }
 
 static void outw(const WCHAR *s)
@@ -55,15 +87,176 @@ static void outw(const WCHAR *s)
     out(buf);
 }
 
-static void step(const char *what) { out("  "); out(what); out(" ... "); }
-static void ok(void) { out("ok\r\n"); }
+static void ui_init(void)
+{
+    CONSOLE_SCREEN_BUFFER_INFO ci;
+    DWORD mode;
+    g_color = GetConsoleMode(g_out, &mode) && GetConsoleScreenBufferInfo(g_out, &ci);
+    if (g_color) g_attr0 = ci.wAttributes;
+    SetConsoleTitleA("urlmagic " UM_VERSION_STR " setup");
+}
+
+static void ui_done(void) { color(g_attr0); }
+
+/* the big logo: 5-row block letters (X = full block) */
+static const char *LOGO_FONT[][5] = {
+    {"X...X", "X...X", "X...X", "X...X", ".XXX."},   /* U */
+    {"XXXX.", "X...X", "XXXX.", "X..X.", "X...X"},   /* R */
+    {"X....", "X....", "X....", "X....", "XXXXX"},   /* L */
+    {"X...X", "XX.XX", "X.X.X", "X...X", "X...X"},   /* M */
+    {".XXX.", "X...X", "XXXXX", "X...X", "X...X"},   /* A */
+    {".XXXX", "X....", "X..XX", "X...X", ".XXX."},   /* G */
+    {"XXX", ".X.", ".X.", ".X.", "XXX"},             /* I */
+    {".XXXX", "X....", "X....", "X....", ".XXXX"},   /* C */
+    {"X..X.", "X..X.", "XXXXX", "...X.", "...X."},   /* 4 */
+};
+/* glyph index, or -1 for a word gap */
+static const int LOGO_TEXT[] = { 0, 1, 2, -1, 3, 4, 5, 6, 7, -1, 8 };
+#define LOGO_W 53
+#define BOX_W 63                         /* inside width */
+
+static void box_edge(char left, char right)
+{
+    color(C_DCYAN);
+    out("  ");
+    outc(left, 1);
+    outc((char)0xCD, BOX_W);
+    outc(right, 1);
+    out("\r\n");
+}
+
+/* one line inside the box: centred text in colour c */
+static void box_line(const char *text, WORD c)
+{
+    int n = lstrlenA(text), pad = (BOX_W - n) / 2;
+    color(C_DCYAN);
+    out("  \xBA");
+    color(c);
+    outc(' ', pad);
+    out(text);
+    outc(' ', BOX_W - n - pad);
+    color(C_DCYAN);
+    out("\xBA\r\n");
+}
+
+static void banner(void)
+{
+    int row, i, j;
+    out("\r\n");
+    box_edge((char)0xC9, (char)0xBB);
+    /* sparkles over the logo */
+    color(C_DCYAN); out("  \xBA");
+    color(C_YELLOW); out("      *          .        +                   .     *          ");
+    color(C_DCYAN); out("  \xBA\r\n");
+    for (row = 0; row < 5; row++) {
+        color(C_DCYAN);
+        out("  \xBA     ");
+        for (i = 0; i < (int)(sizeof LOGO_TEXT / sizeof LOGO_TEXT[0]); i++) {
+            int g = LOGO_TEXT[i];
+            const char *bits;
+            if (g < 0) { out("  "); continue; }
+            color(g <= 2 ? C_CYAN : g <= 7 ? C_MAGENTA : C_RED);
+            bits = LOGO_FONT[g][row];
+            for (j = 0; bits[j]; j++) outc(bits[j] == 'X' ? (char)0xDB : ' ', 1);
+            if (i + 1 < (int)(sizeof LOGO_TEXT / sizeof LOGO_TEXT[0]) && LOGO_TEXT[i + 1] >= 0) out(" ");
+        }
+        outc(' ', BOX_W - 5 - LOGO_W);
+        color(C_DCYAN);
+        out("\xBA\r\n");
+    }
+    box_line("", C_GREY);
+    box_line("URL rewriting for IIS 4.0 on Windows NT 4.0", C_WHITE);
+    box_line("version " UM_VERSION_STR "  \xFA  github.com/muncherelli/urlmagic4", C_DIM);
+    box_edge((char)0xC8, (char)0xBC);
+    color(C_GREY);
+    out("\r\n");
+}
+
+/* "  -- Title ------" */
+static void section(const char *title)
+{
+    color(C_DCYAN);
+    out("  \xC4\xC4 ");
+    color(C_WHITE);
+    out(title);
+    out(" ");
+    color(C_DCYAN);
+    outc((char)0xC4, BOX_W - lstrlenA(title) - 2);
+    color(C_GREY);
+    out("\r\n");
+}
+
+#define RESULT_COL 56
+
+/* "  >> What it's doing ........." then a result */
+static void step(const char *what)
+{
+    color(C_CYAN);
+    out("  \xAF ");
+    color(C_GREY);
+    out(what);
+    out(" ");
+    color(C_DIM);
+    outc((char)0xFA, RESULT_COL - g_col - 1);
+    out(" ");
+}
+
+static void spin(void)
+{
+    static const char chars[] = "|/-\\";
+    if (g_spin < 0) { g_spin = 0; color(C_YELLOW); outc(chars[0], 1); return; }
+    g_spin = (g_spin + 1) % 4;
+    color(C_YELLOW);
+    out("\b");
+    outc(chars[g_spin], 1);
+}
+
+static void spin_end(void)
+{
+    if (g_spin >= 0) { out("\b"); g_spin = -1; }
+}
+
+static void tag(const char *t, WORD c)
+{
+    spin_end();
+    color(C_DIM); out("[");
+    color(c); out(t);
+    color(C_DIM); out("]");
+    color(C_GREY);
+}
+
+static void ok(void) { tag(" OK ", C_GREEN); out("\r\n"); }
+
+/* a result that's a value rather than OK, e.g. a version number */
+static void value(const char *v, BOOL good)
+{
+    spin_end();
+    color(good ? C_GREEN : C_YELLOW);
+    out(v);
+    color(C_GREY);
+    out("\r\n");
+}
+
+static void note(const char *text)
+{
+    color(C_YELLOW);
+    out("      ");
+    out(text);
+    color(C_GREY);
+    out("\r\n");
+}
 
 static void fail(const char *why, DWORD code)
 {
     char buf[300];
-    if (code) wsprintfA(buf, "FAILED: %s (error %lu)\r\n", why, (unsigned long)code);
-    else wsprintfA(buf, "FAILED: %s\r\n", why);
+    if (g_col > 2) { tag("FAIL", C_RED); out("\r\n"); }
+    if (code) wsprintfA(buf, "%s (error %lu)", why, (unsigned long)code);
+    else lstrcpynA(buf, why, sizeof buf);
+    color(C_RED);
+    out("      ");
     out(buf);
+    color(C_GREY);
+    out("\r\n");
     g_errors++;
 }
 
@@ -91,7 +284,10 @@ static BOOL www(BOOL start, BOOL *was_running)
             goto done;
         }
         for (i = 0; i < 120 && st.dwCurrentState != SERVICE_STOPPED; i++) {
-            Sleep(500);
+            spin();
+            Sleep(250);
+            spin();
+            Sleep(250);
             if (!QueryServiceStatus(svc, &st)) break;
         }
         if (st.dwCurrentState != SERVICE_STOPPED) { fail("the WWW service didn't stop", 0); goto done; }
@@ -99,7 +295,10 @@ static BOOL www(BOOL start, BOOL *was_running)
         if (st.dwCurrentState == SERVICE_RUNNING) { result = TRUE; goto done; }
         if (!StartServiceW(svc, 0, NULL)) { fail("can't start the WWW service", GetLastError()); goto done; }
         for (i = 0; i < 120; i++) {
-            Sleep(500);
+            spin();
+            Sleep(250);
+            spin();
+            Sleep(250);
             if (!QueryServiceStatus(svc, &st) || st.dwCurrentState != SERVICE_START_PENDING) break;
         }
         if (st.dwCurrentState != SERVICE_RUNNING) { fail("the WWW service didn't start", 0); goto done; }
@@ -334,7 +533,10 @@ static int ask(const char *question)
 {
     char line[64];
     DWORD n = 0, i;
+    color(C_YELLOW);
+    out("  ");
     out(question);
+    color(C_WHITE);
     if (!ReadFile(GetStdHandle(STD_INPUT_HANDLE), line, sizeof line - 1, &n, NULL)) return 0;
     for (i = 0; i < n; i++) {
         char c = line[i];
@@ -344,11 +546,33 @@ static int ask(const char *question)
     return 0;
 }
 
+/* Warn that the web sites go down briefly; TRUE if the user says go ahead. */
+static BOOL confirm_restart(const char *what)
+{
+    int c;
+    color(C_YELLOW);
+    out("  ! ");
+    color(C_WHITE);
+    out("This stops the WWW service, so every web site on this server is down for a\r\n"
+        "    few seconds while urlmagic ");
+    out(what);
+    out(", then starts it again.\r\n\r\n");
+    c = ask("Continue? [Y/n] ");
+    out("\r\n");
+    if (c == 0 || c == 'y') return TRUE;
+    color(C_DIM);
+    out("  Nothing changed.\r\n");
+    color(C_GREY);
+    return FALSE;
+}
+
 static void wait_to_close(void)
 {
     char line[16];
     DWORD n;
-    out("\r\nPress Enter to close this window.");
+    color(C_DIM);
+    out("\r\n  Press Enter to close this window.");
+    color(C_GREY);
     ReadFile(GetStdHandle(STD_INPUT_HANDLE), line, sizeof line, &n, NULL);
 }
 
@@ -361,20 +585,19 @@ static BOOL check_system(void)
     DWORD major = 0, minor = 0, size, type;
     char line[200];
 
-    out("Checking the system\r\n");
+    section("Checking the system");
     memset(&v, 0, sizeof v);
     v.dwOSVersionInfoSize = sizeof v;
     GetVersionExA(&v);
     step("Windows");
     if (v.dwPlatformId != VER_PLATFORM_WIN32_NT) {
-        out("FAILED: this is Windows 95/98/Me. urlmagic needs Windows NT 4.0 with IIS 4.0.\r\n");
+        fail("this is Windows 95/98/Me; urlmagic needs Windows NT 4.0 with IIS 4.0", 0);
         return FALSE;
     }
     wsprintfA(line, "NT %lu.%lu%s%s", v.dwMajorVersion, v.dwMinorVersion,
               v.szCSDVersion[0] ? " " : "", v.szCSDVersion);
-    out(line);
-    if (v.dwMajorVersion != 4) out(" (not NT 4.0: untested, carrying on)");
-    out("\r\n");
+    value(line, v.dwMajorVersion == 4);
+    if (v.dwMajorVersion != 4) note("Not NT 4.0: untested, carrying on.");
 
     step("IIS");
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\InetStp", 0, KEY_READ, &k) == ERROR_SUCCESS) {
@@ -385,13 +608,13 @@ static BOOL check_system(void)
         RegCloseKey(k);
     }
     if (!major) {
-        out("FAILED: IIS isn't installed (install it from the NT 4.0 Option Pack).\r\n");
+        fail("IIS isn't installed (install it from the NT 4.0 Option Pack)", 0);
         return FALSE;
     }
     wsprintfA(line, "%lu.%lu", major, minor);
-    out(line);
-    if (major != 4) out(" (not IIS 4.0: untested, carrying on)");
-    out("\r\n\r\n");
+    value(line, major == 4);
+    if (major != 4) note("Not IIS 4.0: untested, carrying on.");
+    out("\r\n");
     return TRUE;
 }
 
@@ -421,9 +644,13 @@ static int install(const WCHAR *dir)
     int i;
 
     dir_of_exe(src);
-    out("Installing urlmagic4 " UM_VERSION_STR " to ");
-    outw(dir);
-    out("\r\n\r\n");
+    {
+        char title[MAX_PATH + 40];
+        char d[MAX_PATH];
+        WideCharToMultiByte(CP_OEMCP, 0, dir, -1, d, MAX_PATH, NULL, NULL);
+        wsprintfA(title, "Installing to %s", d);
+        section(title);
+    }
 
     step("Stopping the WWW service");
     if (!www(FALSE, &running)) return 1;
@@ -436,9 +663,12 @@ static int install(const WCHAR *dir)
         join(to, dir, FILES[i]);
         if ((e = extract(FILE_IDS[i], to)) != 0) {
             fail("can't write a file", e);
-            out("    ");
+            color(C_RED);
+            out("      ");
             outw(to);
-            out(e == ERROR_SHARING_VIOLATION ? "\r\n    is in use: close Internet Service Manager and run setup again.\r\n" : "\r\n");
+            out("\r\n");
+            if (e == ERROR_SHARING_VIOLATION) note("It's in use: close Internet Service Manager and run setup again.");
+            color(C_GREY);
             if (running) www(TRUE, NULL);
             return 1;
         }
@@ -461,21 +691,35 @@ static int install(const WCHAR *dir)
     step("Starting the WWW service");
     if (www(TRUE, NULL)) ok();
 
-    if (g_errors) { out("\r\nSetup finished with errors (see above).\r\n"); return 1; }
-    out("\r\nDone.\r\n\r\n"
-        "  1. Open Internet Service Manager, right-click a web site > Properties >\r\n"
-        "     URL Magic. If the tab isn't there, enable it once: Console > Add/Remove\r\n"
-        "     Snap-in > Extensions, choose Internet Information Server, tick URL Magic,\r\n"
-        "     OK, then Console > Save.\r\n"
-        "  2. Add rules: a .htaccess file in a web site's home directory, e.g.\r\n\r\n"
-        "       RewriteEngine On\r\n"
+    out("\r\n");
+    if (g_errors) {
+        color(C_RED);
+        out("  \xFE Setup finished with errors (see above).\r\n");
+        color(C_GREY);
+        return 1;
+    }
+    color(C_GREEN);
+    out("  \xFE urlmagic " UM_VERSION_STR " is installed. Abracadabra!\r\n\r\n");
+    section("Next");
+    color(C_WHITE); out("  1. ");
+    color(C_GREY);
+    out("Internet Service Manager > a web site's Properties > ");
+    color(C_WHITE); out("URL Magic"); color(C_GREY); out(".\r\n"
+        "     No tab? Enable it once: Console > Add/Remove Snap-in > Extensions,\r\n"
+        "     Internet Information Server, tick URL Magic, OK, then Console > Save.\r\n");
+    color(C_WHITE); out("  2. ");
+    color(C_GREY); out("Put a ");
+    color(C_WHITE); out(".htaccess"); color(C_GREY); out(" in a web site's home directory, e.g.\r\n\r\n");
+    color(C_CYAN);
+    out("       RewriteEngine On\r\n"
         "       RewriteCond %{REQUEST_FILENAME} !-f\r\n"
         "       RewriteCond %{REQUEST_FILENAME} !-d\r\n"
-        "       RewriteRule ^(.*)$ index.cfm?page=$1 [L,QSA]\r\n\r\n"
-        "     Each site's Properties > URL Magic tab chooses the format and file.\r\n\r\n"
-        "Problems with rules are logged to ");
+        "       RewriteRule ^(.*)$ index.cfm?page=$1 [L,QSA]\r\n\r\n");
+    color(C_DIM);
+    out("  Problems with rules are logged to ");
     join(to, dir, L"urlmagic4.log");
     outw(to);
+    color(C_GREY);
     out("\r\n");
     return 0;
 }
@@ -503,9 +747,13 @@ static int uninstall(BOOL purge)
     int i;
 
     if (!installed_dir(dir)) default_dir(dir);
-    out("Removing urlmagic4 from ");
-    outw(dir);
-    out("\r\n\r\n");
+    {
+        char title[MAX_PATH + 40];
+        char d[MAX_PATH];
+        WideCharToMultiByte(CP_OEMCP, 0, dir, -1, d, MAX_PATH, NULL, NULL);
+        wsprintfA(title, "Removing from %s", d);
+        section(title);
+    }
 
     step("Stopping the WWW service");
     if (!www(FALSE, &running)) return 1;
@@ -551,7 +799,8 @@ static int uninstall(BOOL purge)
     join(f, dir, L"urlmagic4.log.old");
     DeleteFileW(f);
     if (!RemoveDirectoryW(dir) && reboot) MoveFileExW(dir, NULL, MOVEFILE_DELAY_UNTIL_REBOOT);
-    out(reboot ? "ok (some files were in use; they go at the next reboot)\r\n" : "ok\r\n");
+    ok();
+    if (reboot) note("Some files were in use; they go at the next reboot.");
 
     if (purge) {
         step("Deleting every site's urlmagic4 settings");
@@ -571,8 +820,12 @@ static int uninstall(BOOL purge)
         step("Starting the WWW service");
         if (www(TRUE, NULL)) ok();
     }
-    out(g_errors ? "\r\nFinished with errors (see above).\r\n" : "\r\nurlmagic4 is removed.\r\n");
-    if (!purge) { out("Site settings were kept; `"); outw(g_self); out(" uninstall /purge` removes them too.\r\n"); }
+    out("\r\n");
+    color(g_errors ? C_RED : C_GREEN);
+    out(g_errors ? "  \xFE Finished with errors (see above).\r\n" : "  \xFE urlmagic is removed. Poof!\r\n");
+    color(C_DIM);
+    if (!purge) { out("  Site settings were kept; `"); outw(g_self); out(" uninstall /purge` removes them too.\r\n"); }
+    color(C_GREY);
     return g_errors ? 1 : 0;
 }
 
@@ -603,7 +856,8 @@ void WINAPI start(void)
     CoInitialize(NULL);
     g_interactive = argv && argc == 1;
 
-    out("urlmagic " UM_VERSION_STR " setup - URL rewriting for IIS 4.0\r\n\r\n");
+    ui_init();
+    banner();
     if (!argv) rc = 1;
     else if (argc >= 2 && lstrcmpiW(argv[1], L"uninstall") != 0 && lstrcmpiW(argv[1], L"install") != 0) {
         usage();
@@ -622,29 +876,38 @@ void WINAPI start(void)
             RegCloseKey(k);
         }
         if (installed_dir(have)) {
-            out("urlmagic ");
+            color(C_GREY);
+            out("  urlmagic ");
+            color(C_WHITE);
             outw(ver[0] ? ver : L"(unknown version)");
+            color(C_GREY);
             out(" is installed in ");
+            color(C_WHITE);
             outw(have);
+            color(C_GREY);
             out(".\r\n\r\n");
             c = ask("[I]nstall " UM_VERSION_STR " over it, [U]ninstall, or [Q]uit? ");
             out("\r\n");
-            if (c == 'i') rc = install(have);
-            else if (c == 'u') {
+            if (c == 'i') {
+                if (confirm_restart("is updated")) rc = install(have);
+            } else if (c == 'u') {
                 c = ask("Also delete every web site's URL Magic settings (rules format and file)?\r\n"
-                        "Keep them if you might install urlmagic again. [y/N] ");
+                        "  Keep them if you might install urlmagic again. [y/N] ");
                 out("\r\n");
-                rc = uninstall(c == 'y');
+                if (confirm_restart("is removed")) rc = uninstall(c == 'y');
             }
-            else out("Nothing changed.\r\n");
+            else { color(C_DIM); out("  Nothing changed.\r\n"); color(C_GREY); }
         } else {
             default_dir(dir);
-            out("Install urlmagic " UM_VERSION_STR " to ");
-            outw(dir);
-            c = ask("? [Y/n] ");
+            {
+                char q[MAX_PATH + 60], d[MAX_PATH];
+                WideCharToMultiByte(CP_OEMCP, 0, dir, -1, d, MAX_PATH, NULL, NULL);
+                wsprintfA(q, "Install urlmagic " UM_VERSION_STR " to %s? [Y/n] ", d);
+                c = ask(q);
+            }
             out("\r\n");
-            if (c == 0 || c == 'y') rc = install(dir);
-            else out("Nothing changed.\r\n");
+            if ((c == 0 || c == 'y') && confirm_restart("is installed")) rc = install(dir);
+            else { color(C_DIM); out("  Nothing changed.\r\n"); color(C_GREY); }
         }
     } else if (lstrcmpiW(argv[1], L"install") == 0) {
         if (argc >= 3) {
@@ -656,6 +919,8 @@ void WINAPI start(void)
     }
 
     if (g_interactive) wait_to_close();
+    out("\r\n");
+    ui_done();
     if (argv) LocalFree(argv);
     CoUninitialize();
     ExitProcess((UINT)rc);
