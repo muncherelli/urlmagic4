@@ -5,7 +5,7 @@ static const WCHAR *SRC_NAMES[] = { L"docroot", L"file" };
 
 void um_site_defaults(um_site *s)
 {
-    s->enabled = 1;
+    s->enabled = 0;               /* off until turned on in the site's URL Magic tab */
     s->format = UM_FMT_AUTO;
     s->source = UM_SRC_DOCROOT;
     s->rules_file[0] = 0;

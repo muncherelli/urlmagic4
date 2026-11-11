@@ -96,14 +96,25 @@ $(B)/payload.rc: $(B)/urlmagic4.dll $(B)/urlmagic4-mmc-snap-in.dll $(DOCS) | $(B
 $(B)/setup.res.o: src/setup/setup.rc src/setup/payload.h res/urlmagic4.ico $(B)/version.h $(B)/payload.rc | $(B)
 	$(WINDRES) -O coff -I $(B) -I src/setup -o $@ $<
 
-$(B)/tab.o: src/tab/tab.c src/tab/resource.h src/common/settings.h | $(B)
-	$(CC) $(CFLAGS) -c -o $@ $<
+$(B)/tab.o: src/tab/tab.c src/tab/resource.h src/common/settings.h $(B)/version.h | $(B)
+	$(CC) $(CFLAGS) -I $(B) -c -o $@ $<
 $(B)/tab.res.o: src/tab/tab.rc src/tab/resource.h res/urlmagic4.ico $(B)/version.h | $(B)
 	$(WINDRES) -O coff -I src/tab -I $(B) -o $@ $<
 $(B)/settings.o: src/common/settings.c src/common/settings.h | $(B)
 	$(CC) $(CFLAGS) -c -o $@ $<
 $(B)/nocrt.o: src/common/nocrt.c | $(B)
 	$(CC) $(CFLAGS) -c -o $@ $<
+
+# urlmagic-bench.exe: times the engine on the machine it runs on (see tests/bench.c)
+bench: $(B)/urlmagic-bench.exe
+$(B)/urlmagic-bench.exe: $(B)/bench.o $(B)/rewrite.o $(B)/nocrt.o $(PCRE2_OBJS)
+	$(CC) -nostdlib -s -Wl,-e,_start@0 -Wl,--subsystem,console:4.0 \
+	  -Wl,--major-os-version,4,--minor-os-version,0 \
+	  -Wl,--disable-dynamicbase,--disable-nxcompat -o $@ $^ -lkernel32 -luser32 -lgcc
+	@if i686-w64-mingw32-objdump -d $@ | grep -qE '\bcmov|\bf(u)?comi'; then \
+	  echo "error: $@ uses P6-only instructions"; rm -f $@; exit 1; fi
+$(B)/bench.o: tests/bench.c src/engine/rewrite.h | $(B)
+	$(CC) $(FAST_CFLAGS) -c -o $@ $<
 
 dist: all $(DOCS)
 	rm -rf $(B)/dist $(B)/urlmagic[0-9]*.zip
@@ -122,9 +133,18 @@ $(B)/test_engine: tests/test_engine.c src/engine/rewrite.c src/engine/rewrite.h 
 $(B)/test_engine_exact: tests/test_engine.c src/engine/rewrite.c src/engine/rewrite.h $(PCRE2_SRC) | $(B)
 	$(HOSTCC) $(TEST_FLAGS) -DSCRATCH_BLOCK=1 -DUM_EXACT_CHUNKS -fsanitize=address,undefined -o $@ tests/test_engine.c src/engine/rewrite.c $(PCRE2_SRC)
 
-test: $(B)/test_engine $(B)/test_engine_exact
+# ... with the PCRE2-free fast path switched off, so every rule also passes through PCRE2
+$(B)/test_engine_nofast: tests/test_engine.c src/engine/rewrite.c src/engine/rewrite.h $(PCRE2_SRC) | $(B)
+	$(HOSTCC) $(TEST_FLAGS) -DUM_NO_FASTPATH -fsanitize=address,undefined -o $@ tests/test_engine.c src/engine/rewrite.c $(PCRE2_SRC)
+# the fast path against PCRE2, pattern by pattern
+$(B)/test_fastpath: tests/test_fastpath.c src/engine/rewrite.c src/engine/rewrite.h $(PCRE2_SRC) | $(B)
+	$(HOSTCC) $(TEST_FLAGS) -fsanitize=address,undefined -o $@ tests/test_fastpath.c $(PCRE2_SRC)
+
+test: $(B)/test_engine $(B)/test_engine_exact $(B)/test_engine_nofast $(B)/test_fastpath
 	$(B)/test_engine
 	$(B)/test_engine_exact
+	$(B)/test_engine_nofast
+	$(B)/test_fastpath
 
 install: all
 	rm -f $(DEST)/setup.exe $(DEST)/urlmagic4-v*.exe $(DEST)/urlmagic[0-9]*.exe
@@ -135,4 +155,4 @@ install: all
 clean:
 	rm -rf $(B)
 
-.PHONY: all dist test install clean
+.PHONY: all dist test install clean bench

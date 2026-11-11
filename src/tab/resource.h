@@ -13,3 +13,5 @@
 #define IDC_FMT_GROUP   110
 #define IDC_SRC_GROUP   111
 #define IDC_DEBUG       112
+#define IDC_FMT_NGINX   113
+#define IDC_VERSION     114

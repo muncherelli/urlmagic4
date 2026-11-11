@@ -107,19 +107,52 @@ enum {
     F_C = 256, F_END = 512, F_OR = 1024
 };
 
+/* A substitution or TestString, split up once when the rules are loaded: literal runs (escapes
+   already resolved), $N, %N and %{VAR}. */
+enum { T_LIT, T_RCAP, T_CCAP, T_URI, T_QS, T_VAR };
+
+typedef struct {
+    unsigned char op, n;  /* n: capture number */
+    size_t off, len;     /* T_LIT: text; T_VAR: the NUL-terminated name */
+} tok;
+
+typedef struct {
+    int n;
+    char *text;          /* points just past t[] in the same allocation */
+    tok t[1];
+} tmpl;
+
+/* Patterns simple enough to match without PCRE2: a plain string with optional ^ and $, or a
+   catch-all such as ^(.*)$. Subjects containing a newline still go to PCRE2 ('.' and '$'
+   treat it specially). */
+enum { FP_NONE = 0, FP_LIT, FP_ALL };
+
+typedef struct {
+    int kind;
+    int start, end;      /* FP_LIT: anchored with ^ / $ */
+    int nocase;
+    int groups;          /* capture pairs a match fills: 1, or 2 for (.*) */
+    char *lit;           /* FP_LIT: the string, escapes resolved */
+    size_t len;
+} fastpat;
+
 typedef struct {
     char *test;          /* TestString template */
+    tmpl *tt;            /* ... compiled */
     int kind, negate, flags;
     char *str;           /* C_EQ / C_LT / C_GT */
     pcre2_code *re;      /* C_REGEX */
+    fastpat fp;
 } cond;
 
 typedef struct {
     int type, negate, flags, status, skip, line;
     pcre2_code *re;      /* R_REWRITE, R_REDIRECTMATCH */
+    fastpat fp;
     char *prefix;        /* R_REDIRECT */
     size_t plen;         /* strlen(prefix) */
     char *subst;         /* NULL = "-" (no substitution); for redirects the target URL */
+    tmpl *ts;            /* subst compiled (not for R_REDIRECT, whose target is used as is) */
     cond *conds;
     int nconds;
 } rule;
@@ -150,6 +183,8 @@ static void say(parser *p, const char *a, const char *b)
 
 static void free_cond(cond *c)
 {
+    free(c->tt);
+    free(c->fp.lit);
     free(c->test);
     free(c->str);
     if (c->re) pcre2_code_free(c->re);
@@ -158,6 +193,8 @@ static void free_cond(cond *c)
 static void free_rule(rule *r)
 {
     int i;
+    free(r->ts);
+    free(r->fp.lit);
     if (r->re) pcre2_code_free(r->re);
     free(r->prefix);
     free(r->subst);
@@ -196,6 +233,101 @@ static pcre2_code *compile(parser *p, const char *pat, int nocase)
         if (s) { say(p, s, NULL); free(s); }
     }
     return re;
+}
+
+/* Split a template into tokens (same reading as Apache: \x is x, $N, %N, %{VAR}; anything else is
+   literal). NULL only when out of memory. */
+static tmpl *tmpl_compile(const char *t)
+{
+    size_t len = strlen(t), tl = 0;
+    tmpl *o = malloc(sizeof(tmpl) + sizeof(tok) * (len + 1) + len * 2 + 2);
+    int n = 0;
+    if (!o) return NULL;
+    o->text = (char *)(o->t + len + 1);
+#define T_ADD(op_, n_, off_, len_) \
+    (o->t[n].op = (unsigned char)(op_), o->t[n].n = (unsigned char)(n_), o->t[n].off = (off_), o->t[n].len = (len_), n++)
+#define T_CHAR(c_) do { \
+        if (!n || o->t[n - 1].op != T_LIT) T_ADD(T_LIT, 0, tl, 0); \
+        o->text[tl++] = (c_); o->t[n - 1].len++; \
+    } while (0)
+    while (*t) {
+        if (*t == '\\' && t[1]) {
+            T_CHAR(t[1]);
+            t += 2;
+        } else if (*t == '$' && t[1] >= '0' && t[1] <= '9') {
+            T_ADD(T_RCAP, t[1] - '0', 0, 0);
+            t += 2;
+        } else if (*t == '%' && t[1] >= '0' && t[1] <= '9') {
+            T_ADD(T_CCAP, t[1] - '0', 0, 0);
+            t += 2;
+        } else if (*t == '%' && t[1] == '{' && strchr(t, '}')) {
+            const char *end = strchr(t, '}');
+            size_t k = (size_t)(end - t - 2);
+            if (k < 128) {                      /* longer names expand to nothing */
+                char name[128];
+                memcpy(name, t + 2, k);
+                name[k] = 0;
+                if (ieq(name, "REQUEST_URI")) T_ADD(T_URI, 0, 0, 0);
+                else if (ieq(name, "QUERY_STRING")) T_ADD(T_QS, 0, 0, 0);
+                else {
+                    T_ADD(T_VAR, 0, tl, k);
+                    memcpy(o->text + tl, name, k + 1);
+                    tl += k + 1;
+                }
+            }
+            t = end + 1;
+        } else {
+            T_CHAR(*t);
+            t++;
+        }
+    }
+#undef T_CHAR
+#undef T_ADD
+    o->n = n;
+    return o;
+}
+
+/* Fill f if pat can be matched without PCRE2 (see fastpat); leaves f->kind FP_NONE if not. */
+static void analyze(const char *pat, int nocase, fastpat *f)
+{
+    size_t n = strlen(pat), i, j = 0;
+    char *lit;
+
+    memset(f, 0, sizeof *f);
+    f->nocase = nocase;
+    if (*pat == '^') { f->start = 1; pat++; n--; }
+    if (n && pat[n - 1] == '$') {
+        if (n >= 2 && pat[n - 2] == '\\') return;          /* \$ : too subtle, leave to PCRE2 */
+        f->end = 1;
+        n--;
+    }
+    if ((n == 4 && memcmp(pat, "(.*)", 4) == 0) || (n == 2 && memcmp(pat, ".*", 2) == 0)) {
+        f->kind = FP_ALL;                       /* matches the whole subject, anchored or not */
+        f->groups = n == 4 ? 2 : 1;
+        return;
+    }
+    lit = malloc(n + 1);
+    if (!lit) return;
+    for (i = 0; i < n; i++) {
+        char c = pat[i];
+        if (c == '\\') {
+            char e = pat[++i];
+            /* \. \/ \- ... are the character itself; \d \w \b etc. are not */
+            if (i >= n || (e >= '0' && e <= '9') || (e >= 'a' && e <= 'z') || (e >= 'A' && e <= 'Z') ||
+                (unsigned char)e >= 0x80) { free(lit); return; }
+            lit[j++] = e;
+        } else if (strchr(".[]()*+?{}|^$", c)) {
+            free(lit);
+            return;
+        } else {
+            lit[j++] = c;
+        }
+    }
+    lit[j] = 0;
+    f->kind = FP_LIT;
+    f->groups = 1;
+    f->lit = lit;
+    f->len = j;
 }
 
 /* ---------------------------------------------------------------- tokenizer */
@@ -337,8 +469,11 @@ static int d_cond(parser *p, condlist *cl, int argc, char **argv)
         c.kind = C_REGEX;
         c.re = compile(p, pat, flags & F_NC);
         if (!c.re) return 0;
+        analyze(pat, flags & F_NC, &c.fp);
     }
     c.test = dup(argv[1]);
+    c.tt = tmpl_compile(argv[1]);
+    if (!c.test || !c.tt) { free_cond(&c); say(p, "out of memory", NULL); return 0; }
     if (cl->n == cl->cap) {
         int cap = cl->cap ? cl->cap * 2 : 4;
         cond *nc = malloc(sizeof(cond) * (size_t)cap);
@@ -368,12 +503,19 @@ static int d_rule(parser *p, um_rules *r, condlist *cl, int argc, char **argv)
     if (!ru) { pcre2_code_free(re); return 0; }
     ru->type = R_REWRITE;
     ru->re = re;
+    analyze(pat, flags & F_NC, &ru->fp);
     ru->negate = negate;
     ru->flags = flags;
     ru->status = status;
     ru->skip = skip;
     ru->line = p->line;
     ru->subst = strcmp(argv[2], "-") == 0 ? NULL : dup(argv[2]);
+    if (ru->subst && !(ru->ts = tmpl_compile(ru->subst))) {
+        r->n--;
+        free_rule(ru);
+        say(p, "out of memory", NULL);
+        return 0;
+    }
     ru->conds = cl->c;
     ru->nconds = cl->n;
     cl->c = NULL;
@@ -415,7 +557,8 @@ static int d_redirect(parser *p, um_rules *r, int argc, char **argv, int match)
     ru->subst = to ? dup(to) : NULL;
     if (match) {
         ru->re = compile(p, from, 0);
-        if (!ru->re) { r->n--; free_rule(ru); return 0; }
+        if (!ru->re || (ru->subst && !(ru->ts = tmpl_compile(ru->subst)))) { r->n--; free_rule(ru); return 0; }
+        analyze(from, 0, &ru->fp);
     } else {
         ru->prefix = dup(from);
         if (!ru->prefix) { r->n--; free_rule(ru); return 0; }
@@ -711,16 +854,65 @@ typedef struct {
     const char *path;           /* current, decoded, with leading "/" */
     size_t plen;
     const char *query;          /* current query string (no "?") */
+    int path_nl;                /* path contains a newline (no fast-path matching then) */
+    const char *ft_path;        /* the last -f/-d test in this request, and its answer */
+    int ft_type;
     int failed;
 } state;
 
 /* Every string here lives in the scratch and is never changed once made, so captures stay
    valid for the whole request. */
 
-/* match re against s (len bytes); fills c on success. 1 = match, 0 = no match, -1 = error */
-static int run(state *st, pcre2_code *re, const char *s, size_t len, caps *c)
+static int same(const char *a, const char *b, size_t n, int nocase)
+{
+    size_t i;
+    if (!nocase) return memcmp(a, b, n) == 0;
+    for (i = 0; i < n; i++)
+        if (lower((unsigned char)a[i]) != lower((unsigned char)b[i])) return 0;
+    return 1;
+}
+
+/* match a fastpat; same answers and captures as PCRE2 for subjects without a newline */
+static int fast_match(const fastpat *f, const char *s, size_t len, caps *c)
+{
+    size_t at = 0;
+    if (f->kind == FP_ALL) {
+        c->ov[0] = c->ov[2] = 0;
+        c->ov[1] = c->ov[3] = len;
+    } else {
+        if (len < f->len) return 0;
+        if (f->start && f->end) {
+            if (len != f->len || !same(s, f->lit, len, f->nocase)) return 0;
+        } else if (f->start) {
+            if (!same(s, f->lit, f->len, f->nocase)) return 0;
+        } else if (f->end) {
+            at = len - f->len;
+            if (!same(s + at, f->lit, f->len, f->nocase)) return 0;
+        } else {
+            for (;; at++) {
+                if (at + f->len > len) return 0;
+                if (same(s + at, f->lit, f->len, f->nocase)) break;
+            }
+        }
+        c->ov[0] = at;
+        c->ov[1] = at + f->len;
+    }
+    c->subj = s;
+    c->n = f->groups;
+    return 1;
+}
+
+/* match re (or its fast form) against s (len bytes); fills c on success.
+   1 = match, 0 = no match, -1 = error */
+static int run(state *st, pcre2_code *re, const fastpat *fp, const char *s, size_t len, int nl, caps *c)
 {
     pcre2_match_data *md = st->a->md;
+    if (fp && fp->kind != FP_NONE && !(nl < 0 ? memchr(s, '\n', len) != NULL : nl)
+#ifdef UM_NO_FASTPATH
+        && 0
+#endif
+       )
+        return fast_match(fp, s, len, c);
     int rc = pcre2_match(re, (PCRE2_SPTR)s, len, 0, 0, md, NULL);
     PCRE2_SIZE *ov;
     int i;
@@ -740,44 +932,29 @@ static void add_cap(abuf *b, const caps *c, int n)
     ab_addn(b, c->subj + c->ov[n * 2], c->ov[n * 2 + 1] - c->ov[n * 2]);
 }
 
-/* $N, %N, %{VAR}, \x -> text */
-static char *expand(state *st, const char *t, const caps *rc, const caps *cc, size_t *len)
+/* a compiled template -> text */
+static char *expand(state *st, const tmpl *tp, const caps *rc, const caps *cc, size_t *len)
 {
     abuf b;
     char vbuf[VAR_CAP];
+    int i;
     ab_open(&b, st->a);
-    while (*t) {
-        const char *lit = t;
-        while (*t && *t != '\\' && *t != '$' && *t != '%') t++;
-        if (t > lit) { ab_addn(&b, lit, (size_t)(t - lit)); continue; }
-        if (*t == '\\' && t[1]) {
-            ab_addc(&b, t[1]);
-            t += 2;
-        } else if (*t == '$' && t[1] >= '0' && t[1] <= '9') {
-            add_cap(&b, rc, t[1] - '0');
-            t += 2;
-        } else if (*t == '%' && t[1] >= '0' && t[1] <= '9') {
-            add_cap(&b, cc, t[1] - '0');
-            t += 2;
-        } else if (*t == '%' && t[1] == '{' && strchr(t, '}')) {
-            const char *end = strchr(t, '}');
-            char name[128];
-            size_t n = (size_t)(end - t - 2);
-            if (n < sizeof name) {
-                const char *v = NULL;
-                memcpy(name, t + 2, n);
-                name[n] = 0;
-                if (ieq(name, "REQUEST_URI")) v = st->orig_path;
-                else if (ieq(name, "QUERY_STRING")) v = st->query;
-                else if (st->env && st->env->var) {
-                    vbuf[0] = 0;
-                    v = st->env->var(st->env->ctx, name, st->path, vbuf, sizeof vbuf);
-                }
+    for (i = 0; i < tp->n; i++) {
+        const tok *k = &tp->t[i];
+        switch (k->op) {
+        case T_LIT:  ab_addn(&b, tp->text + k->off, k->len); break;
+        case T_RCAP: add_cap(&b, rc, k->n); break;
+        case T_CCAP: add_cap(&b, cc, k->n); break;
+        case T_URI:  ab_add(&b, st->orig_path); break;
+        case T_QS:   ab_add(&b, st->query); break;
+        default:
+            if (st->env && st->env->var) {
+                const char *v;
+                vbuf[0] = 0;
+                v = st->env->var(st->env->ctx, tp->text + k->off, st->path, vbuf, sizeof vbuf);
                 if (v) ab_add(&b, v);
             }
-            t = end + 1;
-        } else {
-            ab_addc(&b, *t++);
+            break;
         }
     }
     return ab_close(&b, len);
@@ -796,23 +973,34 @@ static char *concat(state *st, const char *a, const char *b, const char *c)
 
 static int cmp(const char *a, const char *b) { return strcmp(a, b); }
 
+/* -f / -d: what is at fspath. "!-f" then "!-d" on the same path is the usual pair, so the
+   last answer in this request is kept (fspath must stay in the scratch). */
+static int file_type(state *st, const char *fspath)
+{
+    if (!st->env || !st->env->file_type) return UM_FT_NONE;
+    if (st->ft_path && strcmp(st->ft_path, fspath) == 0) return st->ft_type;
+    st->ft_type = st->env->file_type(st->env->ctx, fspath);
+    st->ft_path = fspath;
+    return st->ft_type;
+}
+
 /* evaluate one condition; updates *last (the %N captures) when a regex matches */
 static int eval_cond(state *st, const cond *c, const caps *rc, caps *last)
 {
     size_t n;
     amark m = a_mark(st->a);
-    char *v = expand(st, c->test, rc, last, &n);
+    char *v = expand(st, c->tt, rc, last, &n);
     int ok = 0, keep = 0;
     if (!v) { st->failed = 1; return 0; }
     switch (c->kind) {
-    case C_FILE: ok = st->env && st->env->file_type && st->env->file_type(st->env->ctx, v) == UM_FT_FILE; break;
-    case C_DIR:  ok = st->env && st->env->file_type && st->env->file_type(st->env->ctx, v) == UM_FT_DIR; break;
+    case C_FILE: ok = file_type(st, v) == UM_FT_FILE; keep = 1; break;   /* keep v for the cache */
+    case C_DIR:  ok = file_type(st, v) == UM_FT_DIR; keep = 1; break;
     case C_EQ:   ok = (c->flags & F_NC) ? ieq(v, c->str) : cmp(v, c->str) == 0; break;
     case C_LT:   ok = cmp(v, c->str) < 0; break;
     case C_GT:   ok = cmp(v, c->str) > 0; break;
     case C_REGEX: {
         caps mc;
-        int r = run(st, c->re, v, n, &mc);
+        int r = run(st, c->re, &c->fp, v, n, -1, &mc);
         ok = r == 1;
         if (ok && !c->negate) { *last = mc; keep = 1; }     /* %N point into v */
         break;
@@ -884,6 +1072,7 @@ int um_apply_s(const um_rules *r, const char *url, const um_env *env, um_scratch
     st.path = url_decode(a, url, plen, NULL);
     if (!st.path) { st.failed = 1; goto done; }
     st.plen = strlen(st.path);  /* a %00 ends the path, for the regexes too */
+    st.path_nl = memchr(st.path, '\n', st.plen) != NULL;
     st.orig_path = st.path;     /* path is replaced, never changed, so this stays put */
 
     for (i = 0; i < r->n; i++) {
@@ -910,13 +1099,13 @@ int um_apply_s(const um_rules *r, const char *url, const um_env *env, um_scratch
             continue;
         }
         if (ru->type == R_REDIRECTMATCH) {
-            int mm = run(&st, ru->re, st.path, st.plen, &rc);
+            int mm = run(&st, ru->re, &ru->fp, st.path, st.plen, st.path_nl, &rc);
             if (mm < 0) goto done;
             if (mm == 1) {
                 char *u;
                 applied = ru->line;
                 if (ru->status == 410) { finish(out, UM_GONE, 410, NULL); goto done; }
-                u = expand(&st, ru->subst, &rc, NULL, NULL);
+                u = expand(&st, ru->ts, &rc, NULL, NULL);
                 if (!u) { st.failed = 1; goto done; }
                 finish(out, UM_REDIRECT, ru->status, build_url(&st, u, NULL, 0));
                 goto done;
@@ -930,7 +1119,7 @@ int um_apply_s(const um_rules *r, const char *url, const um_env *env, um_scratch
         {
             /* .htaccess style: matched without the leading slash */
             const char *subject = st.plen ? st.path + 1 : st.path;
-            int mm = run(&st, ru->re, subject, st.plen ? st.plen - 1 : 0, &rc);
+            int mm = run(&st, ru->re, &ru->fp, subject, st.plen ? st.plen - 1 : 0, st.path_nl, &rc);
             int ok;
             if (mm < 0) goto done;
             ok = ru->negate ? mm == 0 : mm == 1;
@@ -939,6 +1128,7 @@ int um_apply_s(const um_rules *r, const char *url, const um_env *env, um_scratch
             if (st.failed) goto done;
             if (!ok) {
                 a_rollback(a, m);
+                st.ft_path = NULL;      /* it may point into what was just rolled back */
                 /* a failed rule in a chain skips the rest of the chain */
                 if (ru->flags & F_C)
                     while (i + 1 < r->n && (r->rules[i].flags & F_C)) i++;
@@ -951,7 +1141,7 @@ int um_apply_s(const um_rules *r, const char *url, const um_env *env, um_scratch
         if (ru->flags & F_G) { finish(out, UM_GONE, 410, NULL); goto done; }
 
         if (ru->subst) {
-            char *s = expand(&st, ru->subst, &rc, &cc, NULL);
+            char *s = expand(&st, ru->ts, &rc, &cc, NULL);
             char *qs;
             const char *np, *nq;
             if (!s) { st.failed = 1; goto done; }
@@ -982,6 +1172,7 @@ int um_apply_s(const um_rules *r, const char *url, const um_env *env, um_scratch
             if (!np || !nq) { st.failed = 1; goto done; }
             st.path = np;
             st.plen = strlen(np);
+            st.path_nl = memchr(np, '\n', st.plen) != NULL;
             st.query = nq;
             changed = 1;
 

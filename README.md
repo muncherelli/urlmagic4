@@ -4,7 +4,8 @@
 
 **The missing IIS tab.** URL rewriting for IIS 4.0 on Windows NT 4.0, with Apache mod_rewrite rules.
 
-Put an `httpd.htaccess` in a site's home directory:
+Turn it on in a site's **Properties → URL Magic** tab, then put an `httpd.htaccess` in the
+site's home directory:
 
 ```apache
 RewriteEngine On
@@ -20,7 +21,7 @@ Changes take effect within seconds. No restart.
 Close Internet Service Manager and run `urlmagic<version>.exe` from
 [releases](https://github.com/muncherelli/urlmagic4/releases). Run it again and press **U** to uninstall.
 
-Each site's **Properties → URL Magic** tab turns rewriting off or picks a different rules file.
+Sites are off until you turn them on, so URL Magic costs nothing where it isn't used.
 No tab? **Console → Add/Remove Snap-in → Extensions**, tick **URL Magic**, then **Console → Save**.
 
 Supported rules: [docs/spec.md](docs/spec.md). Errors go to `urlmagic4.log` in the install folder.

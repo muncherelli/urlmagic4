@@ -23,6 +23,7 @@
 
 #include "../common/settings.h"
 #include "resource.h"
+#include "version.h"
 
 /* ---------------------------------------------------------------- ids */
 
@@ -207,6 +208,7 @@ static void fill_page(HWND dlg, page_state *ps)
         SetDlgItemTextW(dlg, IDC_SITE, line);
         ShowWindow(GetDlgItem(dlg, IDC_SITE), SW_SHOW);
     }
+    SetDlgItemTextW(dlg, IDC_VERSION, L"v" UM_VERSION_WSTR);
     CheckDlgButton(dlg, IDC_ENABLED, ps->site.enabled ? BST_CHECKED : BST_UNCHECKED);
     CheckRadioButton(dlg, IDC_FMT_AUTO, IDC_FMT_HTTPDINI, IDC_FMT_AUTO + (int)ps->site.format);
     CheckRadioButton(dlg, IDC_SRC_DOCROOT, IDC_SRC_FILE, IDC_SRC_DOCROOT + (int)ps->site.source);
