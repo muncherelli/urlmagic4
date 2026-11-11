@@ -1255,6 +1255,14 @@ static int splash(const sysinfo *si, BOOL *purge, BOOL remove)
     tui_frame();
     tui_icon(7, 2);                          /* icon 16 + 3 + logo 46, visually centred */
     tui_logo(7 + 16 + 3, 4);
+    {
+        /* credit line under the letters, right-aligned to them (they end at column 71) */
+        static const char by[] = "by muncherelli", sep[] = "  \xFA  ", url[] = "github.com/muncherelli/urlmagic4";
+        int x = 7 + 16 + 3 + LOGO_W - (lstrlenA(by) + lstrlenA(sep) + lstrlenA(url));
+        put(x, 9, A_BRIGHT, by);
+        put(x + lstrlenA(by), 9, ON_BLUE(C_DCYAN), sep);
+        put(x + lstrlenA(by) + lstrlenA(sep), 9, ON_BLUE(C_CYAN), url);
+    }
     put_center(11, ON_BLUE(C_YELLOW), "The missing IIS tab");
     put_center(12, A_TEXT, "URL rewriting for IIS 4.0 on Windows NT 4.0");
 
