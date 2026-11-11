@@ -17,7 +17,7 @@ B       = build
 # CMOV; MinGW's default (pentiumpro) crashes there with 0xC000001E.
 CFLAGS  = -Os -march=i486 -mtune=pentium -std=c99 -Wall -Wextra \
           -ffreestanding -fno-builtin -fno-stack-protector -fno-asynchronous-unwind-tables \
-          -fno-ident -mno-stack-arg-probe \
+          -fno-ident \
           -DUNICODE -D_UNICODE -DWINVER=0x0400 -D_WIN32_WINNT=0x0400 -D_WIN32_IE=0x0300
 # No C runtime; NT 4.0 version stamps; no ASLR/DEP flags (NT 4.0 predates them).
 LDFLAGS = -shared -nostdlib -s -Wl,-e,_DllMain@12 -Wl,--enable-stdcall-fixup \
@@ -26,7 +26,7 @@ LDFLAGS = -shared -nostdlib -s -Wl,-e,_DllMain@12 -Wl,--enable-stdcall-fixup \
           -Wl,--disable-dynamicbase,--disable-nxcompat
 
 TAB_OBJS = $(B)/tab.o $(B)/tab.res.o $(B)/settings.o $(B)/nocrt.o
-TAB_LIBS = -lkernel32 -luser32 -ladvapi32 -lole32 -lcomctl32 -lcomdlg32
+TAB_LIBS = -lkernel32 -luser32 -ladvapi32 -lole32 -lcomctl32 -lcomdlg32 -lgcc
 
 PCRE2_SRC   = $(wildcard third_party/pcre2/src/*.c)
 PCRE2_DEFS  = -DHAVE_CONFIG_H -DPCRE2_CODE_UNIT_WIDTH=8 -DPCRE2_STATIC -DMATCH_LIMIT=200000 -DHEAP_LIMIT=8192
@@ -36,7 +36,7 @@ FILTER_OBJS = $(B)/filter.o $(B)/filter.res.o $(B)/rewrite.o $(B)/settings.o $(B
 FILTER_LIBS = -lkernel32 -luser32 -ladvapi32 -lole32 -lgcc
 
 SETUP_OBJS  = $(B)/setup.o $(B)/setup.res.o $(B)/nocrt.o
-SETUP_LIBS  = -lkernel32 -luser32 -ladvapi32 -lole32 -lshell32
+SETUP_LIBS  = -lkernel32 -luser32 -ladvapi32 -lole32 -lshell32 -lgcc
 
 all: $(B)/urlmagic4.dll $(B)/urlmagic4-mmc-snap-in.dll $(B)/$(SETUP_EXE)
 
