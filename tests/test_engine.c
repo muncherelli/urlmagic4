@@ -194,6 +194,19 @@ int main(void)
           "RewriteCond /site/old.htm -f\nRewriteRule ^(.*)$ /found [L]\n", "/x", UM_REWRITE, 0, "/found");
     check("-f cache: !-f then !-d on the same path", FRONT, "/assets", UM_NONE, 0, NULL);
 
+    /* how substitutions are read (split up once at load time) */
+    check("subst: $ without a digit is literal", "RewriteEngine On\nRewriteRule ^a$ /a$x [L]\n", "/a",
+          UM_REWRITE, 0, "/a$x");
+    check("subst: %{ without } is literal", "RewriteEngine On\nRewriteRule ^a$ /a%{HTTP_HOST [L]\n", "/a",
+          UM_REWRITE, 0, "/a%25%7BHTTP_HOST");
+    check("subst: \\x is x", "RewriteEngine On\nRewriteRule ^a$ /a\\b [L]\n", "/a", UM_REWRITE, 0, "/ab");
+    check("subst: variables", "RewriteEngine On\nRewriteRule ^a$ /%{HTTP_HOST}/%{NOPE}/x [L]\n", "/a",
+          UM_REWRITE, 0, "/dev.muncherelli.com//x");
+    check("subst: REQUEST_URI and QUERY_STRING", "RewriteEngine On\nRewriteRule ^a$ /b?u=%{REQUEST_URI}&q=%{query_string} [L]\n",
+          "/a?z=1", UM_REWRITE, 0, "/b?u=/a&q=z=1");
+    check("subst: $1 then literal then %1", "RewriteEngine On\nRewriteCond %{HTTP_HOST} ^(dev)\nRewriteRule ^(a)$ /$1-x-%1 [L]\n",
+          "/a", UM_REWRITE, 0, "/a-x-dev");
+
     /* a %00 ends the path for every rule (it can't be used to slip past a deny rule) */
     check("%00 in the path", "RewriteEngine On\nRewriteRule \\.cfm$ - [F]\n", "/x.cfm%00.jpg",
           UM_FORBIDDEN, 403, NULL);
