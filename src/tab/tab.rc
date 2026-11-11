@@ -53,8 +53,12 @@ BEGIN
 
     AUTOCHECKBOX    "&Debug: log every request and how long the rules took", IDC_DEBUG, 7, 165, 238, 10
 
-    LTEXT           "Changes take effect on the next request; no IIS restart needed. The log is urlmagic4.log in the urlmagic folder.", -1, 7, 181, 238, 20
+    LTEXT           "Changes take effect on the next request; no IIS restart needed. The log is urlmagic4.log in the urlmagic folder.", -1, 7, 179, 238, 18
 
     /* only shown if the settings couldn't be read */
-    LTEXT           "", IDC_SITE, 7, 204, 238, 10, NOT WS_VISIBLE
+    LTEXT           "", IDC_SITE, 7, 197, 238, 9, NOT WS_VISIBLE
+
+    /* out of the way along the bottom: where it comes from, and which version */
+    LTEXT           "github.com/muncherelli/urlmagic4", -1, 7, 207, 160, 9
+    RTEXT           "", IDC_VERSION, 170, 207, 75, 9
 END

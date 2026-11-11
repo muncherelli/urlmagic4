@@ -96,8 +96,8 @@ $(B)/payload.rc: $(B)/urlmagic4.dll $(B)/urlmagic4-mmc-snap-in.dll $(DOCS) | $(B
 $(B)/setup.res.o: src/setup/setup.rc src/setup/payload.h res/urlmagic4.ico $(B)/version.h $(B)/payload.rc | $(B)
 	$(WINDRES) -O coff -I $(B) -I src/setup -o $@ $<
 
-$(B)/tab.o: src/tab/tab.c src/tab/resource.h src/common/settings.h | $(B)
-	$(CC) $(CFLAGS) -c -o $@ $<
+$(B)/tab.o: src/tab/tab.c src/tab/resource.h src/common/settings.h $(B)/version.h | $(B)
+	$(CC) $(CFLAGS) -I $(B) -c -o $@ $<
 $(B)/tab.res.o: src/tab/tab.rc src/tab/resource.h res/urlmagic4.ico $(B)/version.h | $(B)
 	$(WINDRES) -O coff -I src/tab -I $(B) -o $@ $<
 $(B)/settings.o: src/common/settings.c src/common/settings.h | $(B)
