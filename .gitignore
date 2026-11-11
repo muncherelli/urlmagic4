@@ -5,3 +5,4 @@
 *.exe
 *.lib
 *.exp
+/spike/mmctab/*.o

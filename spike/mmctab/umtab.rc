@@ -1,0 +1,11 @@
+#include <windows.h>
+#include "resource.h"
+
+/* 252x218 dialog units = the usual size of an IIS 4 property page */
+IDD_PAGE DIALOG 0, 0, 252, 218
+STYLE WS_CHILD | WS_DISABLED | WS_CAPTION
+CAPTION "urlmagic4"
+FONT 8, "MS Sans Serif"
+BEGIN
+    EDITTEXT IDC_INFO, 7, 7, 238, 204, ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | WS_HSCROLL | ES_AUTOHSCROLL
+END
