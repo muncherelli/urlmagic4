@@ -241,6 +241,26 @@ static WCHAR *probe(IDataObject *dobj)
         mem_free(p);
     }
 
+    /* EnumFormatEtc isn't supported by IIS 4, so try every custom clipboard format
+       registered in this process (0xC000-0xFFFF) that has a name. */
+    wb_add(&b, L"\r\nAll registered formats this node answers to:\r\n");
+    {
+        UINT cf;
+        int found = 0;
+        for (cf = 0xC000; cf <= 0xFFFF; cf++) {
+            WCHAR fname[128];
+            if (!GetClipboardFormatNameW(cf, fname, 128)) continue;
+            p = get_format(dobj, fname, &n);
+            if (p) {
+                wb_add(&b, L"  ");
+                describe(&b, fname, p, n, n == 16);
+                found++;
+            }
+            mem_free(p);
+        }
+        if (!found) wb_add(&b, L"  (none)\r\n");
+    }
+
     wb_add(&b, L"\r\nEnumFormatEtc: ");
     if (SUCCEEDED(IDataObject_EnumFormatEtc(dobj, DATADIR_GET, &en)) && en) {
         FORMATETC fe;
@@ -272,6 +292,14 @@ static INT_PTR CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         PROPSHEETPAGEW *psp = (PROPSHEETPAGEW *)lp;
         SetDlgItemTextW(dlg, IDC_INFO, (const WCHAR *)psp->lParam);
         return TRUE;
+    }
+    if (msg == WM_SHOWWINDOW && wp) {
+        /* the property sheet (our parent) is titled after the node, e.g. "Site Properties" */
+        WCHAR title[256], line[300];
+        title[0] = 0;
+        GetWindowTextW(GetParent(dlg), title, 256);
+        wsprintfW(line, L"window title: \"%s\"", title);
+        ulog(line);
     }
     return FALSE;
 }
