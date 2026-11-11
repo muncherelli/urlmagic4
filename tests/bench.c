@@ -1,13 +1,15 @@
 /*
  * urlmagic-bench.exe: times the rewrite engine on the machine it runs on (NT 4.0 and up).
  *   urlmagic-bench > bench.txt
- * Each scenario applies its rules to one URL many times; the result is microseconds per request.
+ * Each scenario applies its rules to one URL many times; the result is microseconds per request,
+ * the best of 5 runs. -f/-d tests look at the real disk (C:\ plus the URL path).
  */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include "../src/engine/rewrite.h"
 
-#define ROUNDS 20000
+#define ROUNDS 4000
+#define RUNS   5
 
 static HANDLE out;
 
@@ -17,17 +19,27 @@ static void say(const char *s)
     WriteFile(out, s, (DWORD)lstrlenA(s), &w, NULL);
 }
 
+/* like the filter's: a few names, compared without locale-aware calls */
 static const char *var(void *ctx, const char *name, const char *path, char *buf, size_t cap)
 {
-    (void)ctx; (void)path; (void)buf; (void)cap;
-    if (lstrcmpiA(name, "HTTP_HOST") == 0) return "dev.muncherelli.com";
+    size_t i;
+    (void)ctx;
+    if (name[0] == 'H' && name[5] == 'H') return "dev.muncherelli.com";             /* HTTP_HOST */
+    if (name[0] == 'R' && name[8] == 'F') {                                         /* REQUEST_FILENAME */
+        lstrcpynA(buf, "C:", (int)cap);
+        lstrcpynA(buf + 2, path, (int)cap - 2);
+        for (i = 0; buf[i]; i++) if (buf[i] == '/') buf[i] = '\\';
+        return buf;
+    }
     return NULL;
 }
 
 static int file_type(void *ctx, const char *p)
 {
-    (void)ctx; (void)p;
-    return UM_FT_NONE;
+    DWORD a = GetFileAttributesA(p);
+    (void)ctx;
+    if (a == 0xFFFFFFFF) return UM_FT_NONE;
+    return (a & FILE_ATTRIBUTE_DIRECTORY) ? UM_FT_DIR : UM_FT_FILE;
 }
 
 static void scenario(const char *name, const char *rules, const char *url)
@@ -37,18 +49,22 @@ static void scenario(const char *name, const char *rules, const char *url)
     um_scratch *sc = um_scratch_new();
     um_result res;
     LARGE_INTEGER f, t0, t1;
+    LONGLONG best = 0;
     DWORD ns;
-    int i;
+    int i, run;
     char line[300];
 
     if (!r || !sc) { say("out of memory\r\n"); return; }
     for (i = 0; i < 100; i++) um_apply_s(r, url, &env, sc, &res);     /* warm up */
     QueryPerformanceFrequency(&f);
-    QueryPerformanceCounter(&t0);
-    for (i = 0; i < ROUNDS; i++) um_apply_s(r, url, &env, sc, &res);
-    QueryPerformanceCounter(&t1);
+    for (run = 0; run < RUNS; run++) {
+        QueryPerformanceCounter(&t0);
+        for (i = 0; i < ROUNDS; i++) um_apply_s(r, url, &env, sc, &res);
+        QueryPerformanceCounter(&t1);
+        if (!run || t1.QuadPart - t0.QuadPart < best) best = t1.QuadPart - t0.QuadPart;
+    }
     /* nanoseconds per request */
-    ns = (DWORD)((t1.QuadPart - t0.QuadPart) * 1000000000 / f.QuadPart / ROUNDS);
+    ns = (DWORD)(best * 1000000000 / f.QuadPart / ROUNDS);
     wsprintfA(line, "%-34s %5lu.%02lu us  (%s)\r\n", name, ns / 1000, (ns % 1000) / 10,
               res.action == UM_NONE ? "unchanged" : res.action == UM_REWRITE ? "rewrite" :
               res.action == UM_REDIRECT ? "redirect" : "other");
@@ -66,10 +82,13 @@ static void scenario(const char *name, const char *rules, const char *url)
 void WINAPI start(void)
 {
     out = GetStdHandle(STD_OUTPUT_HANDLE);
-    say("urlmagic4 engine benchmark, " "20000" " requests per line\r\n\r\n");
+    say("urlmagic4 engine benchmark: microseconds per request, best of 5 x 4000\r\n\r\n");
     scenario("no rule matches (1 rule)", "RewriteEngine On\nRewriteRule ^magic$ index.cfm [L]\n",
              "/assets/site.css");
     scenario("no rule matches (10 rules)", "RewriteEngine On\n" TEN_MISSES, "/assets/site.css");
+    scenario("no match, fails at the last byte", "RewriteEngine On\nRewriteRule ^assets/site.csx$ /x [L]\n",
+             "/assets/site.css");
+    scenario("^assets/ - [L] alone", "RewriteEngine On\nRewriteRule ^assets/ - [L]\n", "/assets/site.css");
     scenario("static folder ^assets/ - [L]",
              "RewriteEngine On\nRewriteRule ^assets/ - [L]\nRewriteRule ^(.*)$ index.cfm?page=$1 [L,QSA]\n",
              "/assets/site.css");
