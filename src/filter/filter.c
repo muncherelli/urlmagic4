@@ -405,7 +405,10 @@ static um_scratch *thread_scratch(void)
     um_scratch *sc;
     if (g_tls == TLS_OUT_OF_INDEXES) return NULL;
     sc = TlsGetValue(g_tls);
-    if (!sc && (sc = um_scratch_new()) != NULL) TlsSetValue(g_tls, sc);
+    if (!sc) {
+        sc = um_scratch_new();
+        if (sc) TlsSetValue(g_tls, sc);
+    }
     return sc;
 }
 
@@ -690,6 +693,7 @@ static DWORD preproc(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr)
     env.var = env_var;
     env.file_type = env_file_type;
 
+    t0.QuadPart = 0;
     if (sn->debug) QueryPerformanceCounter(&t0);
     sc = thread_scratch();
     if (sc) um_apply_s(sn->rules->r, url, &env, sc, &res);

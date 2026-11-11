@@ -648,9 +648,12 @@ static char *url_decode(um_scratch *a, const char *s, size_t n, size_t *len)
     ab_open(&b, a);
     if (!ab_reserve(&b, n)) return NULL;
     for (i = 0; i < n; i++) {
-        int h, l;
-        if (s[i] == '%' && i + 2 < n && (h = hexval((unsigned char)s[i + 1])) >= 0 &&
-            (l = hexval((unsigned char)s[i + 2])) >= 0) {
+        int h = -1, l = -1;
+        if (s[i] == '%' && i + 2 < n) {
+            h = hexval((unsigned char)s[i + 1]);
+            l = hexval((unsigned char)s[i + 2]);
+        }
+        if (h >= 0 && l >= 0) {
             b.s[b.len++] = (char)(h * 16 + l);
             i += 2;
         } else {
