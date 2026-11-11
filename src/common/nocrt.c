@@ -5,19 +5,25 @@
 #include <stddef.h>
 #include <windows.h>
 
+/* x86 string instructions: 4 bytes per step (PCRE2 copies a frame for every backtracking
+   step, so these are hot). Windows guarantees the direction flag is clear. */
 void *memset(void *d, int c, size_t n)
 {
-    unsigned char *p = d;
-    while (n--) *p++ = (unsigned char)c;
-    return d;
+    void *r = d;
+    size_t w = n >> 2, b = n & 3;
+    unsigned v = (unsigned char)c * 0x01010101u;
+    __asm__ volatile ("rep stosl" : "+D"(d), "+c"(w) : "a"(v) : "memory");
+    __asm__ volatile ("rep stosb" : "+D"(d), "+c"(b) : "a"(v) : "memory");
+    return r;
 }
 
 void *memcpy(void *d, const void *s, size_t n)
 {
-    unsigned char *p = d;
-    const unsigned char *q = s;
-    while (n--) *p++ = *q++;
-    return d;
+    void *r = d;
+    size_t w = n >> 2, b = n & 3;
+    __asm__ volatile ("rep movsl" : "+D"(d), "+S"(s), "+c"(w) : : "memory");
+    __asm__ volatile ("rep movsb" : "+D"(d), "+S"(s), "+c"(b) : : "memory");
+    return r;
 }
 
 void *memmove(void *d, const void *s, size_t n)

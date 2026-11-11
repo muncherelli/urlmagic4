@@ -19,6 +19,8 @@ CFLAGS  = -Os -march=i486 -mtune=pentium -std=c99 -Wall -Wextra \
           -ffreestanding -fno-builtin -fno-stack-protector -fno-asynchronous-unwind-tables \
           -fno-ident \
           -DUNICODE -D_UNICODE -DWINVER=0x0400 -D_WIN32_WINNT=0x0400 -D_WIN32_IE=0x0300
+# The request path (rewrite engine and PCRE2) is built for speed rather than size.
+FAST_CFLAGS = $(patsubst -Os,-O2,$(CFLAGS))
 # No C runtime; NT 4.0 version stamps; no ASLR/DEP flags (NT 4.0 predates them).
 LDFLAGS = -shared -nostdlib -s -Wl,-e,_DllMain@12 -Wl,--enable-stdcall-fixup \
           -Wl,--major-os-version,4,--minor-os-version,0 \
@@ -62,10 +64,10 @@ $(B)/filter.o: src/filter/filter.c src/common/settings.h src/engine/rewrite.h $(
 $(B)/filter.res.o: src/filter/filter.rc $(B)/version.h | $(B)
 	$(WINDRES) -O coff -I $(B) -o $@ $<
 $(B)/rewrite.o: src/engine/rewrite.c src/engine/rewrite.h | $(B)
-	$(CC) $(CFLAGS) -Ithird_party/pcre2/src $(PCRE2_DEFS) -c -o $@ $<
+	$(CC) $(FAST_CFLAGS) -Ithird_party/pcre2/src $(PCRE2_DEFS) -c -o $@ $<
 $(B)/pcre2/%.o: third_party/pcre2/src/%.c | $(B)
 	@mkdir -p $(B)/pcre2
-	$(CC) $(CFLAGS) -w -Ithird_party/pcre2/src $(PCRE2_DEFS) -c -o $@ $<
+	$(CC) $(FAST_CFLAGS) -w -Ithird_party/pcre2/src $(PCRE2_DEFS) -c -o $@ $<
 
 $(B)/$(SETUP_EXE): $(SETUP_OBJS)
 	rm -f $(B)/urlmagic[0-9]*.exe
