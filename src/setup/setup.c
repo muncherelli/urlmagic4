@@ -2,7 +2,7 @@
  * urlmagic<version>.exe (e.g. urlmagic4.0.0.exe) - console installer for urlmagic4 on IIS 4.0.
  *
  *   urlmagic4.0.0                       ask, then install / upgrade / uninstall (double-click)
- *   urlmagic4.0.0 install [dir]         install to dir (default %SystemDrive%\urlmagic4)
+ *   urlmagic4.0.0 install [dir]         install to dir (default %SystemDrive%\URLMagic4)
  *   urlmagic4.0.0 uninstall          remove (keeps each site's settings)
  *   urlmagic4.0.0 uninstall /purge   remove, including each site's settings
  *
@@ -774,7 +774,7 @@ static void default_dir(WCHAR *dir)
 {
     WCHAR drive[8];
     if (!GetEnvironmentVariableW(L"SystemDrive", drive, 8)) lstrcpyW(drive, L"C:");
-    wsprintfW(dir, L"%s\\urlmagic4", drive);
+    wsprintfW(dir, L"%s\\URLMagic4", drive);
 }
 
 static void join(WCHAR *outp, const WCHAR *dir, const WCHAR *file)
@@ -1157,7 +1157,7 @@ static void usage(void)
 {
     out("urlmagic " UM_VERSION_STR " setup\r\n\r\n  ");
     outw(g_self); out("                    ask what to do\r\n  ");
-    outw(g_self); out(" install [folder]   install or upgrade (default %SystemDrive%\\urlmagic4)\r\n  ");
+    outw(g_self); out(" install [folder]   install or upgrade (default %SystemDrive%\\URLMagic4)\r\n  ");
     outw(g_self); out(" uninstall          remove urlmagic4 (keeps site settings)\r\n  ");
     outw(g_self); out(" uninstall /purge   remove urlmagic4 and every site's settings\r\n");
 }
