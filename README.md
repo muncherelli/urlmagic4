@@ -2,11 +2,9 @@
 
 # urlmagic4
 
-**The missing IIS tab.** URL rewriting for **IIS 4.0 on Windows NT 4.0**, as an ISAPI filter,
-with its own tab in Internet Service Manager.
+**The missing IIS tab.** URL rewriting for IIS 4.0 on Windows NT 4.0, with Apache mod_rewrite rules.
 
-Pretty URLs, 301 redirects and conditional rewrites for sites still served by IIS 4,
-configured with Apache mod_rewrite rules in an `httpd.htaccess` file (or `.htaccess`):
+Put an `httpd.htaccess` in a site's home directory:
 
 ```apache
 RewriteEngine On
@@ -15,73 +13,19 @@ RewriteCond %{REQUEST_FILENAME} !-d
 RewriteRule ^(.*)$ index.cfm?page=$1 [L,QSA]
 ```
 
-> **Status:** 4.0.0 in development: Apache-style rules work; `httpd.ini` support is next.
-
-## Goals
-
-* Runs on NT 4.0 SP6a / IIS 4.0 (x86); no runtime to install.
-* Apache mod_rewrite syntax, so rules from tutorials and Apache docs work as is.
-* Also reads ISAPI_Rewrite 2 `httpd.ini` files, so existing rules keep working.
-* A rules file per site (`httpd.htaccess`, since NT's Explorer can't make `.htaccess`, though
-  that name works too). Changes apply without restarting IIS.
-* Small and auditable: the filter runs inside IIS, so it must never crash it.
-
-See [docs/spec.md](docs/spec.md) for what's supported, and
-[docs/httpd-ini.md](docs/httpd-ini.md) for the `httpd.ini` format.
-
-urlmagic4 is an independent project, not affiliated with Helicon Tech; ISAPI_Rewrite is
-their trademark.
+Changes take effect within seconds. No restart.
 
 ## Install
 
-Requirements: Windows NT 4.0 (SP6a recommended) with IIS 4.0, any 486 or later CPU.
+Close Internet Service Manager and run `urlmagic<version>.exe` from
+[releases](https://github.com/muncherelli/urlmagic4/releases). Run it again and press **U** to uninstall.
 
-1. Download the installer, e.g. `urlmagic4.0.0.exe`, from the
-   [releases](https://github.com/muncherelli/urlmagic4/releases) and copy it to the server.
-   It's a single file: both DLLs and the docs are inside it.
-2. Close Internet Service Manager and double-click it. Setup opens full-screen, in the style
-   of NT's own text-mode Setup: it checks Windows NT (version, build, service pack), IIS and
-   administrator rights, asks where to install (default `C:\URLMagic4`), then
-   installs with a progress bar: stop the WWW service, unpack everything (and a copy of
-   itself) to that folder, register the URL Magic tab,
-   add urlmagic4 to IIS's ISAPI filters, start the WWW service. It also appears in
-   **Control Panel → Add/Remove Programs**. From a command prompt (no prompts, for scripts):
-   `urlmagic4.0.0 install [folder]`.
-3. Open **Internet Service Manager** → a web site's **Properties** → **URL Magic**. If the tab
-   isn't there, enable it once: **Console → Add/Remove Snap-in → Extensions**, choose
-   *Internet Information Server*, tick **URL Magic**, OK, then **Console → Save**.
-4. Put an `httpd.htaccess` in a web site's home directory (see the example above). Changes are
-   picked up within a couple of seconds; no restart needed.
+Each site's **Properties → URL Magic** tab turns rewriting off or picks a different rules file.
+No tab? **Console → Add/Remove Snap-in → Extensions**, tick **URL Magic**, then **Console → Save**.
 
-Each web site's **Properties → URL Magic** tab turns rewriting on or off and chooses the
-rules format and file. Settings live in `HKLM\SOFTWARE\URLMagic4\Sites\W3SVC\<site number>`.
-Problems in rules files are written to `urlmagic4.log` in the install folder.
-
-**Uninstall:** Control Panel → Add/Remove Programs → *URL Magic*, or run the installer again
-and press **U**. It asks whether to delete every site's URL Magic settings too. From a command
-prompt: `C:\URLMagic4\urlmagic4.0.0 uninstall` (add `/purge` to delete the settings).
-
-**Sites whose home directory is a network share:** IIS runs filters as LocalSystem, which
-can't read network shares. Keep that site's rules file on the server's own disk and choose it
-with *In this file* on the tab; `-f`/`-d` tests can't see the site's files, so match static
-folders by name instead (`RewriteRule ^assets/ - [L]`).
-
-## Building
-
-On Linux with the MinGW-w64 i686 cross-compiler (`gcc-mingw-w64-i686` on Debian,
-`mingw-w64-gcc` on Arch):
-
-* `make` builds `build/urlmagic4.dll`, `build/urlmagic4-mmc-snap-in.dll` and the installer
-  `build/urlmagic<version>.exe`
-* `make test` runs the rewrite engine's tests natively (needs `gcc`)
-* `make dist` makes the release zip
-* `python3 tools/make_art.py` redraws the icon and `docs/logo.png` from pixel art
-
-Releases use [semver](https://semver.org) and release-please (from Conventional Commits): see
-[docs/releasing.md](docs/releasing.md).
-Regular expressions are [PCRE2](https://github.com/PCRE2Project/pcre2) (BSD licence), bundled
-in `third_party/pcre2`.
+Supported rules: [docs/spec.md](docs/spec.md). Errors go to `urlmagic4.log` in the install folder.
+To build: `make`, with the MinGW-w64 i686 cross-compiler.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. Bundles [PCRE2](https://github.com/PCRE2Project/pcre2) (BSD).
