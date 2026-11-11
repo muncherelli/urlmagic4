@@ -245,8 +245,8 @@ static void banner(void)
 #define A_TEXT   ON_BLUE(C_GREY)
 #define A_BRIGHT ON_BLUE(C_WHITE)
 #define A_KEYBAR ((WORD)0x70)
-#define STEP_X   6
-#define TAG_X    66
+#define STEP_X   4                    /* one column, 4 in from the left ... */
+#define TAG_X    70                   /* ... and "[ OK ]" ends 4 in from the right */
 #define BAR_ROW  11
 #define RES_ROW  13
 #define MAX_MSGS 6
@@ -292,7 +292,7 @@ static void clear_rows(int y0, int y1)
 static void keybar(const char *keys)
 {
     fill(0, SCR_H - 1, A_KEYBAR, ' ', SCR_W);
-    put(2, SCR_H - 1, A_KEYBAR, keys);
+    put(STEP_X, SCR_H - 1, A_KEYBAR, keys);
 }
 
 /* "[ OK ]" etc. */
@@ -394,7 +394,7 @@ static void tui_logo(int x0, int y0)
 
 static void tui_bar(void)
 {
-    const int x0 = 8, width = 58;
+    const int x0 = STEP_X, width = 65;   /* [####] at 4..70, "100%" at 72..75 */
     int filled = g_total ? g_done * width / g_total : 0;
     char pct[8];
     if (filled > width) filled = width;
@@ -428,7 +428,7 @@ static void section(const char *title)
 {
     if (g_tui) {                         /* start the progress screen */
         tui_frame();
-        put(STEP_X - 2, 2, A_BRIGHT, title);
+        put(STEP_X, 2, A_BRIGHT, title);
         g_row = 4;
         g_done = 0;
         tui_bar();
@@ -1277,7 +1277,7 @@ static int splash(const sysinfo *si, BOOL *purge, BOOL remove)
         }
         if (ls > lw) lw = ls;
     }
-    check_cell(STEP_X + 2, 15, 44, "Windows", v, lw);
+    check_cell(STEP_X, 15, 40, "Windows", v, lw);
     /* IIS */
     if (!si->iis_major) { li = FAIL_; lstrcpyA(v, "missing"); if (!problem) problem = "Install IIS 4.0 from the NT 4.0 Option Pack first."; }
     else {
@@ -1285,9 +1285,9 @@ static int splash(const sysinfo *si, BOOL *purge, BOOL remove)
         li = si->iis_major == 4 ? OK_ : WARN_;
         if (li == WARN_ && !advice) advice = "Not IIS 4.0: urlmagic is untested here.";
     }
-    check_cell(52, 15, 70, "IIS", v, li);
+    check_cell(48, 15, TAG_X, "IIS", v, li);
     /* administrator */
-    check_cell(STEP_X + 2, 16, 44, "Admin", si->admin ? "yes" : "no", si->admin ? OK_ : FAIL_);
+    check_cell(STEP_X, 16, 40, "Admin", si->admin ? "yes" : "no", si->admin ? OK_ : FAIL_);
     if (!si->admin && !problem) problem = "Log on as an Administrator to install urlmagic.";
     /* urlmagic */
     if (si->installed) {
@@ -1296,7 +1296,7 @@ static int splash(const sysinfo *si, BOOL *purge, BOOL remove)
     } else {
         lstrcpyA(v, "not installed");
     }
-    check_cell(52, 16, 70, "urlmagic", v, -1);
+    check_cell(48, 16, TAG_X, "urlmagic", v, -1);
 
     if (remove && !si->installed && !problem) problem = "urlmagic isn't installed.";
     if (problem) {
