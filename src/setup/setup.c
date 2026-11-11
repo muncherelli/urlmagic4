@@ -1224,6 +1224,21 @@ static void check_cell(int x, int y, int tag_x, const char *label, const char *v
     else if (level == FAIL_) tui_tag(tag_x, y, "FAIL", C_RED);
 }
 
+/* compare "a.b.c" version strings: <0, 0, >0 */
+static int vercmp(const WCHAR *a, const WCHAR *b)
+{
+    int i;
+    for (i = 0; i < 3; i++) {
+        long x = 0, y = 0;
+        while (*a >= L'0' && *a <= L'9') x = x * 10 + (*a++ - L'0');
+        while (*b >= L'0' && *b <= L'9') y = y * 10 + (*b++ - L'0');
+        if (x != y) return x < y ? -1 : 1;
+        if (*a == L'.') a++;
+        if (*b == L'.') b++;
+    }
+    return 0;
+}
+
 #define MSG_ROW 18                           /* two message rows, then blank rows to the key bar */
 
 /* the splash screen; returns 'i' (install), 'u' (uninstall) or 'q' */
@@ -1234,6 +1249,8 @@ static int splash(const sysinfo *si, BOOL *purge, BOOL remove)
     const char *quit = remove ? "ESC/CTRL+C=Cancel" : "ESC/CTRL+C=Quit";
     char keys[100];
     int lw, ls, li, k;
+    /* installed version vs this installer: <0 upgrade, 0 reinstall, >0 downgrade */
+    int cmp = si->installed ? vercmp(si->ver[0] ? si->ver : L"0", UM_VERSION_WSTR) : 0;
 
     tui_frame();
     tui_icon(7, 2);                          /* icon 16 + 3 + logo 46, visually centred */
@@ -1295,7 +1312,11 @@ static int splash(const sysinfo *si, BOOL *purge, BOOL remove)
         if (remove) {
             wsprintfA(v, "Setup will remove urlmagic from %s.", d);
         } else if (si->installed) {
-            wsprintfA(v, "Setup will install urlmagic %s over the copy in %s.", UM_VERSION_STR, d);
+            char have[32];
+            WideCharToMultiByte(CP_OEMCP, 0, si->ver[0] ? si->ver : L"?", -1, have, sizeof have, NULL, NULL);
+            if (cmp == 0) wsprintfA(v, "Setup will reinstall urlmagic %s in %s.", UM_VERSION_STR, d);
+            else if (cmp < 0) wsprintfA(v, "Setup will upgrade urlmagic %s to %s in %s.", have, UM_VERSION_STR, d);
+            else wsprintfA(v, "Setup will replace the newer urlmagic %s with %s in %s.", have, UM_VERSION_STR, d);
         } else {
             WCHAR dflt[MAX_PATH];
             default_dir(dflt);
@@ -1308,7 +1329,9 @@ static int splash(const sysinfo *si, BOOL *purge, BOOL remove)
         if (advice && !remove) put(STEP_X, MSG_ROW + 2, ON_BLUE(C_YELLOW), advice);
 
         if (remove) wsprintfA(keys, "ENTER=Uninstall   %s", quit);
-        else if (si->installed) wsprintfA(keys, "ENTER=Install   U=Uninstall   %s", quit);
+        else if (si->installed)
+            wsprintfA(keys, "ENTER=%s   U=Uninstall   %s",
+                      cmp == 0 ? "Reinstall" : cmp < 0 ? "Upgrade" : "Downgrade", quit);
         else wsprintfA(keys, "ENTER=Install   %s", quit);
         keybar(keys);
         k = key();
