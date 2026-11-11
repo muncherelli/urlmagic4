@@ -15,9 +15,9 @@ BEGIN
             VALUE "CompanyName",      "urlmagic4 contributors\0"
             VALUE "FileDescription",  "URL Magic tab for Internet Service Manager\0"
             VALUE "FileVersion",      UM_VERSION_STR "\0"
-            VALUE "InternalName",     "urlmagic4tab\0"
+            VALUE "InternalName",     "urlmagic4-mmc-snap-in\0"
             VALUE "LegalCopyright",   "MIT License\0"
-            VALUE "OriginalFilename", "urlmagic4tab.dll\0"
+            VALUE "OriginalFilename", "urlmagic4-mmc-snap-in.dll\0"
             VALUE "ProductName",      "urlmagic4\0"
             VALUE "ProductVersion",   UM_VERSION_STR "\0"
         END

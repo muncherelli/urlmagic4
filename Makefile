@@ -1,5 +1,5 @@
 # urlmagic4 - built with the MinGW-w64 i686 cross-compiler, for Windows NT 4.0 on 486+ CPUs.
-#   make            build/urlmagic4.dll (the filter), build/urlmagic4tab.dll (the tab) and
+#   make            build/urlmagic4.dll (the filter), build/urlmagic4-mmc-snap-in.dll (the tab) and
 #                   build/urlmagic<version>.exe, e.g. urlmagic4.0.0.exe (the installer)
 #   make test       run the rewrite engine's tests natively
 #   make dist       build/urlmagic<version>.zip (the installer + README, LICENSE, CHANGELOG)
@@ -38,7 +38,7 @@ FILTER_LIBS = -lkernel32 -luser32 -ladvapi32 -lole32 -lgcc
 SETUP_OBJS  = $(B)/setup.o $(B)/setup.res.o $(B)/nocrt.o
 SETUP_LIBS  = -lkernel32 -luser32 -ladvapi32 -lole32 -lshell32
 
-all: $(B)/urlmagic4.dll $(B)/urlmagic4tab.dll $(B)/$(SETUP_EXE)
+all: $(B)/urlmagic4.dll $(B)/urlmagic4-mmc-snap-in.dll $(B)/$(SETUP_EXE)
 
 $(B):
 	mkdir -p $@
@@ -47,7 +47,7 @@ $(B):
 $(B)/version.h: version.txt | $(B)
 	printf '#define UM_VERSION_STR "%s"\n#define UM_VERSION_WSTR L"%s"\n#define UM_VERSION_NUM %s\n' '$(VERSION)' '$(VERSION)' '$(VERSION_NUM)' > $@
 
-$(B)/urlmagic4tab.dll: $(TAB_OBJS) src/tab/tab.def
+$(B)/urlmagic4-mmc-snap-in.dll: $(TAB_OBJS) src/tab/tab.def
 	$(CC) $(LDFLAGS) -o $@ $(TAB_OBJS) src/tab/tab.def $(TAB_LIBS)
 	@if i686-w64-mingw32-objdump -d $@ | grep -qE '\bcmov|\bf(u)?comi'; then \
 	  echo "error: $@ uses P6-only instructions"; rm -f $@; exit 1; fi
@@ -86,9 +86,9 @@ $(B)/CHANGELOG.txt: CHANGELOG.md tools/totxt.py | $(B)
 	python3 tools/totxt.py $< $@
 
 # the installer carries everything it installs
-$(B)/payload.rc: $(B)/urlmagic4.dll $(B)/urlmagic4tab.dll $(DOCS) | $(B)
+$(B)/payload.rc: $(B)/urlmagic4.dll $(B)/urlmagic4-mmc-snap-in.dll $(DOCS) | $(B)
 	printf '%s RCDATA "%s"\n' \
-	  ID_FILTER_DLL '$(abspath $(B)/urlmagic4.dll)' ID_TAB_DLL '$(abspath $(B)/urlmagic4tab.dll)' \
+	  ID_FILTER_DLL '$(abspath $(B)/urlmagic4.dll)' ID_TAB_DLL '$(abspath $(B)/urlmagic4-mmc-snap-in.dll)' \
 	  ID_README '$(abspath $(B)/README.txt)' ID_LICENSE '$(abspath $(B)/LICENSE.txt)' \
 	  ID_CHANGELOG '$(abspath $(B)/CHANGELOG.txt)' > $@
 $(B)/setup.res.o: src/setup/setup.rc src/setup/payload.h res/urlmagic4.ico $(B)/version.h $(B)/payload.rc | $(B)
@@ -121,7 +121,7 @@ test: $(B)/test_engine
 
 install: all
 	rm -f $(DEST)/setup.exe $(DEST)/urlmagic4-v*.exe $(DEST)/urlmagic[0-9]*.exe
-	rm -f $(DEST)/urlmagic4.dll $(DEST)/urlmagic4tab.dll $(DEST)/README.md $(DEST)/LICENSE $(DEST)/CHANGELOG.md
+	rm -f $(DEST)/urlmagic4.dll $(DEST)/urlmagic4tab.dll $(DEST)/urlmagic4-mmc-snap-in.dll $(DEST)/README.md $(DEST)/LICENSE $(DEST)/CHANGELOG.md
 	@# executable, or Samba refuses to let Windows run it
 	install -m 0755 $(B)/$(SETUP_EXE) $(DEST)/
 

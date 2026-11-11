@@ -71,7 +71,7 @@ folders by name instead (`RewriteRule ^assets/ - [L]`).
 On Linux with the MinGW-w64 i686 cross-compiler (`gcc-mingw-w64-i686` on Debian,
 `mingw-w64-gcc` on Arch):
 
-* `make` builds `build/urlmagic4.dll`, `build/urlmagic4tab.dll` and the installer
+* `make` builds `build/urlmagic4.dll`, `build/urlmagic4-mmc-snap-in.dll` and the installer
   `build/urlmagic<version>.exe`
 * `make test` runs the rewrite engine's tests natively (needs `gcc`)
 * `make dist` makes the release zip

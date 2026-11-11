@@ -1,4 +1,4 @@
-LIBRARY urlmagic4tab
+LIBRARY urlmagic4-mmc-snap-in
 EXPORTS
     DllGetClassObject   PRIVATE
     DllCanUnloadNow     PRIVATE

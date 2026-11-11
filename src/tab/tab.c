@@ -1,15 +1,15 @@
 /*
- * urlmagic4tab.dll - the "urlmagic4" tab in IIS 4.0's Internet Service Manager.
+ * urlmagic4-mmc-snap-in.dll - the "URL Magic" tab in IIS 4.0's Internet Service Manager.
  *
  * An MMC property-sheet extension for the IIS snap-in's web site node. The tab edits that
  * site's urlmagic4 settings (see ../common/settings.h) in the registry of the machine the
  * IIS manager is connected to.
  *
- *   regsvr32 urlmagic4tab.dll        register; also listed as a "required extension" of the
+ *   regsvr32 urlmagic4-mmc-snap-in.dll   register; also listed as a "required extension" of the
  *                                    IIS snap-in so consoles enable it without asking (where MMC
  *                                    supports that; otherwise Console > Add/Remove Snap-in >
  *                                    Extensions, once per console)
- *   regsvr32 /u urlmagic4tab.dll     remove
+ *   regsvr32 /u urlmagic4-mmc-snap-in.dll   remove
  */
 #define WIN32_LEAN_AND_MEAN
 #define COBJMACROS
@@ -45,7 +45,8 @@ static const IID IID_UmUnknown =
 static const IID IID_UmClassFactory =
     {0x00000001, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
 
-static const WCHAR TAB_NAME[] = L"URL Magic";
+static const WCHAR TAB_NAME[] = L"URL Magic";        /* the tab's title */
+static const WCHAR SNAPIN_NAME[] = L"URL Magic 4";   /* how MMC lists the extension */
 static const WCHAR MMC_SNAPINS[]   = L"Software\\Microsoft\\MMC\\SnapIns";
 static const WCHAR MMC_NODETYPES[] = L"Software\\Microsoft\\MMC\\NodeTypes";
 
@@ -489,18 +490,18 @@ HRESULT WINAPI DllRegisterServer(void)
 
     GetModuleFileNameW(g_hinst, dll, MAX_PATH);
     wsprintfW(path, L"CLSID\\%s", CLSID_Tab_Str);
-    r = set_str(HKEY_CLASSES_ROOT, path, NULL, L"urlmagic4 IIS manager tab");
+    r = set_str(HKEY_CLASSES_ROOT, path, NULL, L"URL Magic 4 (IIS manager tab)");
     wsprintfW(path, L"CLSID\\%s\\InprocServer32", CLSID_Tab_Str);
     if (r == ERROR_SUCCESS) r = set_str(HKEY_CLASSES_ROOT, path, NULL, dll);
     if (r == ERROR_SUCCESS) r = set_str(HKEY_CLASSES_ROOT, path, L"ThreadingModel", L"Apartment");
     wsprintfW(path, L"%s\\%s", MMC_SNAPINS, CLSID_Tab_Str);
-    if (r == ERROR_SUCCESS) r = set_str(HKEY_LOCAL_MACHINE, path, L"NameString", TAB_NAME);
+    if (r == ERROR_SUCCESS) r = set_str(HKEY_LOCAL_MACHINE, path, L"NameString", SNAPIN_NAME);
     wsprintfW(path, L"%s\\%s\\Extensions\\PropertySheet", MMC_NODETYPES, NODE_WEBSITE_Str);
-    if (r == ERROR_SUCCESS) r = set_str(HKEY_LOCAL_MACHINE, path, CLSID_Tab_Str, TAB_NAME);
+    if (r == ERROR_SUCCESS) r = set_str(HKEY_LOCAL_MACHINE, path, CLSID_Tab_Str, SNAPIN_NAME);
     /* best effort: MMC always enables a snap-in's required extensions */
     if (r == ERROR_SUCCESS) {
         wsprintfW(path, L"%s\\%s\\RequiredExtensions\\%s", MMC_SNAPINS, SNAPIN_IIS_Str, CLSID_Tab_Str);
-        set_str(HKEY_LOCAL_MACHINE, path, NULL, TAB_NAME);
+        set_str(HKEY_LOCAL_MACHINE, path, NULL, SNAPIN_NAME);
     }
     return r == ERROR_SUCCESS ? S_OK : HRESULT_FROM_WIN32(r);
 }

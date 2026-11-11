@@ -9,7 +9,7 @@
  * Everything it installs is inside it (RCDATA resources, see payload.h), so this one file is
  * all you need. It also copies itself into the install folder, to uninstall later.
  *
- * Installing: stops the WWW service, copies urlmagic4.dll and urlmagic4tab.dll, registers
+ * Installing: stops the WWW service, copies urlmagic4.dll and urlmagic4-mmc-snap-in.dll, registers
  * the URL Magic tab, adds urlmagic4 to IIS's global ISAPI filters, starts the WWW service.
  */
 #define WIN32_LEAN_AND_MEAN
@@ -31,7 +31,7 @@ static const GUID IID_UmIMSAdminBase =
 static const WCHAR FILTER_NAME[] = L"urlmagic4";
 static const WCHAR FILTERS_KEY[] = L"/LM/W3SVC/Filters";
 /* installed files, in the order of their resource IDs (payload.h) */
-static const WCHAR *FILES[] = { L"urlmagic4.dll", L"urlmagic4tab.dll", L"README.txt", L"LICENSE.txt",
+static const WCHAR *FILES[] = { L"urlmagic4.dll", L"urlmagic4-mmc-snap-in.dll", L"README.txt", L"LICENSE.txt",
                                 L"CHANGELOG.txt", NULL };
 static const int FILE_IDS[] = { ID_FILTER_DLL, ID_TAB_DLL, ID_README, ID_LICENSE, ID_CHANGELOG };
 
@@ -753,7 +753,7 @@ static BOOL tab_register(const WCHAR *dll, BOOL reg)
     HMODULE m = LoadLibraryW(dll);
     regfn fn;
     HRESULT hr;
-    if (!m) { if (reg) fail("can't load urlmagic4tab.dll", GetLastError()); return !reg; }
+    if (!m) { if (reg) fail("can't load urlmagic4-mmc-snap-in.dll", GetLastError()); return !reg; }
     fn = (regfn)GetProcAddress(m, reg ? "DllRegisterServer" : "DllUnregisterServer");
     hr = fn ? fn() : E_FAIL;
     FreeLibrary(m);
@@ -994,8 +994,10 @@ static int install(const WCHAR *dir)
     record_dir(dir);
 
     step("Registering the URL Magic tab");
-    join(to, dir, L"urlmagic4tab.dll");
+    join(to, dir, L"urlmagic4-mmc-snap-in.dll");
     if (tab_register(to, TRUE)) ok();
+    join(to, dir, L"urlmagic4tab.dll");          /* the tab's name in early 4.0.0 builds */
+    DeleteFileW(to);
 
     step("Adding the urlmagic4 ISAPI filter to IIS");
     join(to, dir, L"urlmagic4.dll");
@@ -1079,7 +1081,8 @@ static int uninstall(BOOL purge)
     if (filter_unregister()) ok();
 
     step("Unregistering the URL Magic tab");
-    join(f, dir, L"urlmagic4tab.dll");
+    join(f, dir, L"urlmagic4-mmc-snap-in.dll");
+    if (GetFileAttributesW(f) == 0xFFFFFFFF) join(f, dir, L"urlmagic4tab.dll");   /* early 4.0.0 builds */
     if (tab_register(f, FALSE)) ok();
 
     step("Deleting files");
@@ -1112,7 +1115,12 @@ static int uninstall(BOOL purge)
     }
     join(f, dir, L"urlmagic4.log");
     DeleteFileW(f);
-    /* docs as named by early 4.0.0 builds */
+    /* files as named by early 4.0.0 builds */
+    join(f, dir, L"urlmagic4tab.dll");
+    if (!DeleteFileW(f) && GetLastError() != ERROR_FILE_NOT_FOUND) {
+        MoveFileExW(f, NULL, MOVEFILE_DELAY_UNTIL_REBOOT);
+        reboot = TRUE;
+    }
     join(f, dir, L"README.md");
     DeleteFileW(f);
     join(f, dir, L"CHANGELOG.md");
