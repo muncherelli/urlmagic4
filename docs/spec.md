@@ -1,134 +1,148 @@
 # urlmagic4 specification
 
-What urlmagic4 does, written so it can be implemented and tested without looking at any
-other product's code. Rule syntax follows the `httpd.ini` format of ISAPI_Rewrite 2.x so
-existing rule files keep working; sources are that product's public documentation and
-black-box testing against it.
-
-Items marked **(verify)** are not certain from the documentation and must be settled by
-testing against ISAPI_Rewrite 2 Lite on IIS 4.0 before they are implemented.
+What urlmagic4 does. Rules use **Apache mod_rewrite syntax** (`.htaccess` style), so rules
+from Apache documentation and tutorials work with little or no change. Behaviour follows the
+Apache httpd documentation for mod_rewrite; where this spec says "as Apache", that document is
+the reference. urlmagic4 implements a subset, listed below.
 
 ## 1. Target
 
-* Windows NT 4.0 SP6a, IIS 4.0, x86. Must also load on later IIS 5/6 but that is not tested.
+* Windows NT 4.0 SP6a, IIS 4.0, x86. Should also load on IIS 5/6; not tested there.
 * One DLL, `urlmagic4.dll`, installed as a **global** ISAPI filter (server properties).
-* No C runtime dependency; only `kernel32.dll` APIs present on NT 4.0.
-* The filter runs inside `inetinfo.exe`: a crash takes every site down. Bounded memory per
-  request, no recursion on user input, regex with match limits.
+* No C runtime dependency; only `kernel32.dll` (and `advapi32.dll` for the event log) APIs
+  present on NT 4.0.
+* The filter runs inside `inetinfo.exe`, so a crash takes every site down. Bounded memory
+  per request, no recursion on user input, regex with match limits.
 
-## 2. Configuration files
+## 2. The typical use: a front controller
+
+Send every address that isn't a real file or folder to one script:
+
+```apache
+RewriteEngine On
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.*)$ index.cfm?page=$1 [L,QSA]
+```
+
+`/about/team?x=1` → `/index.cfm?page=about/team&x=1`; `/assets/site.css` is served as is.
+
+## 3. Configuration files
 
 | File | Where | Applies to |
 |---|---|---|
-| Global | `httpd.ini` in the folder holding `urlmagic4.dll` | every site, evaluated first |
-| Site | `httpd.ini` in the site's home directory (physical root) | that site, after the global file |
+| Server | `urlmagic4.conf` in the folder holding `urlmagic4.dll` | every site, runs first |
+| Site | `.htaccess` in the site's home directory (physical root) | that site |
 
-* INI style. Only lines inside the `[ISAPI_Rewrite]` section count; everything else is
-  ignored. One directive per line; `#` starts a comment line. Blank lines ignored.
+* Same syntax in both. `#` starts a comment; blank lines ignored; a trailing `\` continues a
+  line.
 * A file is re-read when it changes (checked at most once per second per file); no restart.
-* Syntax errors are written to `httpd.parse.errors` beside the file; the bad line is skipped,
-  the rest of the file still loads.
-* The filter itself always refuses requests for `httpd.ini` and `httpd.parse.errors`
-  (any directory, any case) with 404, so site rule files can never be downloaded.
+* Errors are written to the Windows Application event log (source `urlmagic4`) with file and
+  line. A bad line is skipped; the rest of the file still loads.
+* The filter always refuses requests for `.htaccess` and `urlmagic4.conf` (any folder, any
+  case) with 403, so rule files can't be downloaded.
+* v1 reads `.htaccess` only in the site root; per-folder `.htaccess` files are later.
 
-**Open question (site files on network shares):** IIS runs filters as LocalSystem, which has
-no network credentials, so a site whose home directory is a UNC share (e.g. a dev site served
-from Samba) cannot have its `httpd.ini` read there. Proposed urlmagic4 extension, global file
-only: `SiteConfig <SiteID|"Site name"> <local path to httpd.ini>`.
+### Sites on network shares
 
-## 3. Directives
+IIS runs filters as LocalSystem, which has no network credentials. For a site whose home
+directory is a UNC share (e.g. a dev site served from Samba):
 
-### v1
+* its `.htaccess` can't be read there. Server-file directive (urlmagic4 extension):
+  `SiteConfig <SiteID|"Site name"> <local path to a .htaccess>`.
+* `-f` / `-d` tests can't see its files and always report "missing". Exclude static folders
+  by pattern instead (`RewriteRule ^assets/ - [L]`).
 
-| Directive | Syntax | Scope |
-|---|---|---|
-| `RewriteRule` | `Pattern FormatString [Flags]` | global, site |
-| `RewriteCond` | `TestVerb Pattern [Flags]` | global, site; binds to the next `RewriteRule`/`RewriteHeader` only |
-| `RewriteHeader` | `HeaderName Pattern FormatString [Flags]` | global, site; empty result removes the header. `METHOD` rewrites the verb. Header name with or without colon (verify) |
-| `RepeatLimit` | `N` (default 32) | global, site (capped by the global value). 0 or 1 = no looping |
-| `EnableConfig` / `DisableConfig` | `[SiteID\|"Site name"]` | global: whether site files are read |
-| `EnableRewrite` / `DisableRewrite` | `[SiteID\|"Site name"]` | global: whether a site is rewritten at all |
-| `UriMatchPrefix` / `UriFormatPrefix` | `Prefix` | prepended to later patterns / format strings |
+Server-file only (urlmagic4 extensions): `SiteConfig`, `DisableSite <SiteID|"Site name">`.
 
-### Later or never
+## 4. Directives (v1)
 
-* `RewriteProxy`, flag `P`, `RFStyle`, the helper extension: proxying (Full-only in the
-  original). Not planned; Caddy or IIS itself can proxy.
-* `CacheClockRate`: accepted and ignored (we reload on file change instead).
-
-## 4. Matching
-
-* **TestVerb** for `RewriteCond`: `URL` (request URI), `METHOD`, `VERSION`, `Header-Name:`
-  (any request header, trailing colon), `%ServerVariable` (IIS server variable, case-sensitive).
-  A missing header is an empty string.
-* `RewriteRule` tests the request URI **including the query string** (verify).
-* Patterns are Perl-style regular expressions and must match the **whole** string (implicitly
-  anchored at both ends).
-* A rule and its conditions are matched as one combined expression:
-  `(?:cond1)\n(?:cond2)\n...\n(?:rule)` against `value1\nvalue2\n...\nuri`. Therefore capture
-  groups are numbered across the conditions first, then the rule: with one condition holding
-  one group, the rule's first group is `$2`.
-* Flag `I` on the rule makes the rule and all its conditions case-insensitive.
-* Rules run top to bottom, global file then site file.
-
-## 5. Format strings
-
-| Syntax | Meaning |
+| Directive | Syntax |
 |---|---|
-| `$N` | capture group N (0-99) |
-| `$0`, `$&` | whole match |
-| `` $` ``, `$'` | text before / after the match |
-| `?N<text>:<text>` | first text if group N matched, else the second (verify exact form) |
-| `\` + char | literal: `\(` `\)` `\$` `\?` `\:` (verify: backslash vs other) |
-| `\n \r \t \xHH` | control / hex characters |
+| `RewriteEngine` | `On` \| `Off` (default Off; each file needs `On`) |
+| `RewriteBase` | `URL-path` prefix added to relative substitutions (default `/`) |
+| `RewriteCond` | `TestString CondPattern [flags]`; applies to the next `RewriteRule` only |
+| `RewriteRule` | `Pattern Substitution [flags]` |
+| `Redirect` | `[status] URL-path URL` (prefix match, as Apache mod_alias) |
+| `RedirectMatch` | `[status] regex URL` |
 
-The result replaces the URL. If the result contains `?`, the part after it becomes the new
-query string.
+Later: `RewriteMap`, `RewriteOptions`, per-folder files, `<IfModule>` (v1 ignores the wrapper
+lines and reads what's inside, so copied files still load).
+
+## 5. Matching
+
+* **What `RewriteRule` sees:** the URL path, %-decoded, **without the leading `/`** and
+  without the query string (as Apache per-directory context). `/about/team?x=1` → `about/team`.
+  The server file sees the same (with a leading `/`, as Apache server context).
+* Patterns are PCRE (Perl-compatible) regexes, not anchored unless you write `^`/`$`.
+  A leading `!` negates the pattern (then no `$N` groups).
+* Rules run top to bottom: server file first, then the site's `.htaccess`.
+* A rewritten URL that stays in the same site is processed again from the top of
+  `.htaccess` (as Apache per-directory), up to 10 rounds; then 500. `[END]` stops for good.
+
+### Variables in `TestString` and `Substitution`
+
+`%{HTTP_HOST}`, `%{HTTP_USER_AGENT}`, `%{HTTP_REFERER}`, `%{HTTP_COOKIE}`, `%{HTTP:Any-Header}`,
+`%{REQUEST_URI}`, `%{QUERY_STRING}`, `%{REQUEST_METHOD}`, `%{REQUEST_FILENAME}`,
+`%{THE_REQUEST}`, `%{SERVER_NAME}`, `%{SERVER_PORT}`, `%{HTTPS}`, `%{REMOTE_ADDR}`.
+
+### Condition patterns
+
+| Pattern | True when |
+|---|---|
+| `regex` / `!regex` | matches / doesn't |
+| `-f` / `!-f` | `TestString` is an existing file / isn't |
+| `-d` / `!-d` | existing folder / isn't |
+| `=text`, `<text`, `>text` | string equal / less / greater |
+
+### Back-references
+
+`$1`..`$9` from the rule pattern; `%1`..`%9` from the last matched `RewriteCond`.
 
 ## 6. Flags
 
-### `RewriteRule` / `RewriteHeader`, v1
+### `RewriteRule`
 
 | Flag | Meaning |
 |---|---|
-| `I` | case-insensitive (rule and its conditions) |
-| `L` | stop after this rule if it matched |
-| `N` | after rewriting, restart from the first rule (bounded by `RepeatLimit`) |
-| `NS` | after rewriting, re-run from this same rule (bounded by `RepeatLimit`) |
-| `R` | redirect, 302 |
-| `RP` | redirect, 301 permanent |
-| `F` | refuse the request: 404 (verify: 403 or 404) |
-| `CL` / `CU` | lowercase / uppercase the result |
-| `O` | normalise the input first (URL-decode, clean up) — drops the query string |
-| `U` | log the original URL in the IIS log instead of the rewritten one |
+| `L` | last rule this round |
+| `END` | stop all rewriting for this request |
+| `NC` | case-insensitive |
+| `R`, `R=301` | external redirect (302 default; 301/302/303/307) |
+| `QSA` | append the original query string to the new one |
+| `QSD` | drop the original query string |
+| `F` | 403 Forbidden |
+| `G` | 410 Gone |
+| `NE` | don't %-escape the substitution |
+| `C` | chain: skip the following rules if this one doesn't match |
+| `S=N` | skip the next N rules |
+
+Substitution `-` means "no change" (use with `F`, `G`, `L`).
+If the substitution has a `?`, its query replaces the original unless `QSA`.
 
 ### `RewriteCond`
 
 | Flag | Meaning |
 |---|---|
-| `O` | normalise the input first |
+| `NC` | case-insensitive |
+| `OR` | OR with the next condition (default is AND) |
 
-Unknown flags are a parse error (logged; the line is skipped).
+Unknown flags: logged, line skipped.
 
 ## 7. IIS 4 behaviour
 
-* Hook: `SF_NOTIFY_PREPROC_HEADERS` (rewrite `url`, headers, method), `SF_NOTIFY_LOG` (for `U`).
-* Rewrite: `SetHeader("url", new)`; IIS then maps the new URL to a file as usual.
-* Redirect: send status line and `Location` with `SF_REQ_SEND_RESPONSE_HEADER`, then
+* Hook `SF_NOTIFY_PREPROC_HEADERS`: read `url` and headers, run rules, `SetHeader("url", ...)`.
+* `%{REQUEST_FILENAME}` and `-f`/`-d` need the URL mapped to a disk path before IIS does
+  it (to be decided: read the site's home directory from the metabase at startup, or defer
+  the decision to `SF_NOTIFY_URL_MAP`), then `GetFileAttributes`.
+* Redirects, 403, 410: send the status and headers with `SF_REQ_SEND_RESPONSE_HEADER`, return
   `SF_STATUS_REQ_FINISHED`.
-* Regex failure (match limit hit, etc.): 500, logged to the Windows event log.
+* Regex failure (match limit hit, etc.): 500, logged to the event log.
+* IIS logs the original URL (urlmagic4 logs rewrites at debug level only).
 
-## 8. v1 scope summary
+## 8. Build and release
 
-In: `RewriteRule`, `RewriteCond`, `RewriteHeader`, `RepeatLimit`, `Enable/DisableConfig`,
-`Enable/DisableRewrite`, `UriMatchPrefix`/`UriFormatPrefix`, flags `I L N NS R RP F CL CU O U`,
-global + per-site files with auto-reload, the `SiteConfig` extension.
-
-Out: proxying (`RewriteProxy`, `P`, `RFStyle`).
-
-## 9. Build and release
-
-* Portable C core (parser, matcher, formatter) with tests that run on Linux.
+* Portable C core (parser, matcher, substitution) with tests that run on Linux.
 * Thin ISAPI layer, cross-compiled with MinGW-w64 (i686), no CRT, NT 4.0 subsystem version.
-* Regex: PCRE2 (BSD licence), compiled into the DLL.
-* GitHub Actions builds the DLL on each push and attaches it to releases.
+* PCRE2 (BSD licence) compiled into the DLL.
+* GitHub Actions builds the DLL on every push and attaches it to releases.

@@ -3,20 +3,25 @@
 URL rewriting for **IIS 4.0 on Windows NT 4.0**, as an ISAPI filter.
 
 Pretty URLs, 301 redirects and conditional rewrites for sites still served by IIS 4,
-configured with mod_rewrite-style rules in a plain text file.
+configured with Apache mod_rewrite rules in a `.htaccess` file:
+
+```apache
+RewriteEngine On
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.*)$ index.cfm?page=$1 [L,QSA]
+```
 
 > **Status:** early design. Nothing to download yet.
 
 ## Goals
 
 * Runs on NT 4.0 SP6a / IIS 4.0 (x86); no runtime to install.
-* Rule syntax compatible with the `httpd.ini` format used by ISAPI_Rewrite 2, so existing
-  rule files keep working.
-* Per-site rule files.
+* Apache mod_rewrite syntax, so rules from tutorials and Apache docs work as is.
+* A `.htaccess` per site, plus one server-wide file. Changes apply without restarting IIS.
 * Small and auditable: the filter runs inside IIS, so it must never crash it.
 
-urlmagic4 is an independent project, written from public documentation and black-box
-testing. It is not affiliated with Helicon Tech; ISAPI_Rewrite is their trademark.
+See [docs/spec.md](docs/spec.md) for what's supported.
 
 ## License
 
