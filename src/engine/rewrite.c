@@ -793,7 +793,7 @@ static void a_rollback(um_scratch *a, amark m)
     if (a->extra == m.extra && !a->oom) { a->cur = m.cur; a->left = m.left; }
 }
 
-/* %XX -> byte (the whole string; "+" stays "+") */
+/* %XX -> byte ("+" stays "+"); a %00 ends the string, so the rules never see past it */
 static char *url_decode(um_scratch *a, const char *s, size_t n, size_t *len)
 {
     abuf b;
@@ -807,7 +807,9 @@ static char *url_decode(um_scratch *a, const char *s, size_t n, size_t *len)
             l = hexval((unsigned char)s[i + 2]);
         }
         if (h >= 0 && l >= 0) {
-            b.s[b.len++] = (char)(h * 16 + l);
+            char ch = (char)(h * 16 + l);
+            if (!ch) break;
+            b.s[b.len++] = ch;
             i += 2;
         } else {
             b.s[b.len++] = s[i];
@@ -1075,9 +1077,8 @@ int um_apply_s(const um_rules *r, const char *url, const um_env *env, um_scratch
     st.env = env;
     st.a = a;
     st.query = q ? q + 1 : "";
-    st.path = url_decode(a, url, plen, NULL);
+    st.path = url_decode(a, url, plen, &st.plen);
     if (!st.path) { st.failed = 1; goto done; }
-    st.plen = strlen(st.path);  /* a %00 ends the path, for the regexes too */
     st.path_nl = memchr(st.path, '\n', st.plen) != NULL;
     st.orig_path = st.path;     /* path is replaced, never changed, so this stays put */
 
