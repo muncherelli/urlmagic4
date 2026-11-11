@@ -5,6 +5,7 @@
 #include "../src/engine/rewrite.h"
 
 static int failures, passed;
+static um_scratch *shared;      /* reused by every check, like one IIS thread's */
 
 /* a pretend web site: these paths exist under the docroot "/site" */
 static const char *FILES[] = { "/site/index.cfm", "/site/assets/site.css", "/site/old.htm", NULL };
@@ -53,9 +54,16 @@ static void check(const char *name, const char *rules, const char *url,
     um_rules *r = um_parse(rules, strlen(rules), UM_DIALECT_APACHE, logline, &logs);
     um_result res;
     int ok;
+    um_result rs;
+    int ok_s;
 
+    /* the same rules through the reused scratch must give the same answer */
+    um_apply_s(r, url, &env, shared, &rs);
+    ok_s = rs.action == action && (!status || rs.status == status) &&
+           ((expect_url == NULL && rs.url == NULL) ||
+            (expect_url && rs.url && strcmp(expect_url, rs.url) == 0));
     um_apply(r, url, &env, &res);
-    ok = res.action == action && (!status || res.status == status) &&
+    ok = ok_s && res.action == action && (!status || res.status == status) &&
          ((expect_url == NULL && res.url == NULL) ||
           (expect_url && res.url && strcmp(expect_url, res.url) == 0));
     if (ok) {
@@ -91,6 +99,7 @@ static const char *FRONT =
 
 int main(void)
 {
+    shared = um_scratch_new();
     /* the front controller */
     check("front: pretty url", FRONT, "/about/team", UM_REWRITE, 0, "/index.cfm?page=about/team");
     check("front: keeps query (QSA)", FRONT, "/about?x=1", UM_REWRITE, 0, "/index.cfm?page=about&x=1");
@@ -178,6 +187,38 @@ int main(void)
         um_rules_free(r);
     }
 
+    /* a %00 ends the path for every rule (it can't be used to slip past a deny rule) */
+    check("%00 in the path", "RewriteEngine On\nRewriteRule \\.cfm$ - [F]\n", "/x.cfm%00.jpg",
+          UM_FORBIDDEN, 403, NULL);
+
+    /* bigger than the scratch's block: overflow chunks */
+    {
+        static char url[6000], want[6000 * 4];
+        size_t i;
+        url[0] = '/';
+        for (i = 1; i < 5000; i++) url[i] = (char)('a' + i % 26);
+        url[i] = 0;
+        snprintf(want, sizeof want, "%s%s%s%s", url, url + 1, url + 1, url + 1);
+        check("long URL x4", "RewriteEngine On\nRewriteRule ^(.*)$ /$1$1$1$1 [L]\n", url,
+              UM_REWRITE, 0, want);
+        check("long URL x4 again (scratch reused after overflow)",
+              "RewriteEngine On\nRewriteRule ^(.*)$ /$1$1$1$1 [L]\n", url, UM_REWRITE, 0, want);
+    }
+    /* many rules whose conditions fail: their strings are rolled back, not piled up */
+    {
+        static char rules[200000];
+        size_t n = 0;
+        int i;
+        n += (size_t)snprintf(rules + n, sizeof rules - n, "RewriteEngine On\n");
+        for (i = 0; i < 2000; i++)
+            n += (size_t)snprintf(rules + n, sizeof rules - n,
+                                  "RewriteCond %%{HTTP_HOST}/%%{REQUEST_URI} ^nope%d\nRewriteRule ^ - [F]\n", i);
+        snprintf(rules + n, sizeof rules - n,
+                 "RewriteCond %%{HTTP_HOST} ^(dev)\\.\nRewriteRule ^(.*)$ /%%1/$1 [L]\n");
+        check("2000 failing rules, then one", rules, "/x", UM_REWRITE, 0, "/dev/x");
+    }
+
+    um_scratch_free(shared);
     printf("%d passed, %d failed\n", passed, failures);
     return failures ? 1 : 0;
 }

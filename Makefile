@@ -116,8 +116,13 @@ TEST_FLAGS  = -O1 -g -std=c99 -Wall -Wextra -D_DEFAULT_SOURCE -Ithird_party/pcre
 $(B)/test_engine: tests/test_engine.c src/engine/rewrite.c src/engine/rewrite.h $(PCRE2_SRC) | $(B)
 	$(HOSTCC) $(TEST_FLAGS) -fsanitize=address,undefined -o $@ tests/test_engine.c src/engine/rewrite.c $(PCRE2_SRC)
 
-test: $(B)/test_engine
+# the same tests with every engine string in its own allocation, so ASan checks each one
+$(B)/test_engine_exact: tests/test_engine.c src/engine/rewrite.c src/engine/rewrite.h $(PCRE2_SRC) | $(B)
+	$(HOSTCC) $(TEST_FLAGS) -DSCRATCH_BLOCK=1 -DUM_EXACT_CHUNKS -fsanitize=address,undefined -o $@ tests/test_engine.c src/engine/rewrite.c $(PCRE2_SRC)
+
+test: $(B)/test_engine $(B)/test_engine_exact
 	$(B)/test_engine
+	$(B)/test_engine_exact
 
 install: all
 	rm -f $(DEST)/setup.exe $(DEST)/urlmagic4-v*.exe $(DEST)/urlmagic[0-9]*.exe
