@@ -630,7 +630,12 @@ void WINAPI start(void)
             c = ask("[I]nstall " UM_VERSION_STR " over it, [U]ninstall, or [Q]uit? ");
             out("\r\n");
             if (c == 'i') rc = install(have);
-            else if (c == 'u') rc = uninstall(FALSE);
+            else if (c == 'u') {
+                c = ask("Also delete every web site's URL Magic settings (rules format and file)?\r\n"
+                        "Keep them if you might install urlmagic again. [y/N] ");
+                out("\r\n");
+                rc = uninstall(c == 'y');
+            }
             else out("Nothing changed.\r\n");
         } else {
             default_dir(dir);
