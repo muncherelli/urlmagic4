@@ -226,7 +226,7 @@ static void browse(HWND dlg)
     memset(&ofn, 0, sizeof ofn);
     ofn.lStructSize = OPENFILENAME_SIZE_VERSION_400W;   /* the size NT 4.0 knows */
     ofn.hwndOwner = dlg;
-    ofn.lpstrFilter = L"Rule files (.htaccess, httpd.ini, *.conf)\0.htaccess;httpd.ini;*.conf;*.ini\0"
+    ofn.lpstrFilter = L"Rule files (*.htaccess, httpd.ini)\0*.htaccess;.htaccess;*.ini\0"
                       L"All files (*.*)\0*.*\0";
     ofn.lpstrFile = file;
     ofn.nMaxFile = MAX_PATH;

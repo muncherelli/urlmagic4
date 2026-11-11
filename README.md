@@ -6,7 +6,7 @@
 with its own tab in Internet Service Manager.
 
 Pretty URLs, 301 redirects and conditional rewrites for sites still served by IIS 4,
-configured with Apache mod_rewrite rules in a `.htaccess` file:
+configured with Apache mod_rewrite rules in an `httpd.htaccess` file (or `.htaccess`):
 
 ```apache
 RewriteEngine On
@@ -15,14 +15,15 @@ RewriteCond %{REQUEST_FILENAME} !-d
 RewriteRule ^(.*)$ index.cfm?page=$1 [L,QSA]
 ```
 
-> **Status:** 4.0.0 in development: Apache-style `.htaccess` rules work; `httpd.ini` support is next.
+> **Status:** 4.0.0 in development: Apache-style rules work; `httpd.ini` support is next.
 
 ## Goals
 
 * Runs on NT 4.0 SP6a / IIS 4.0 (x86); no runtime to install.
 * Apache mod_rewrite syntax, so rules from tutorials and Apache docs work as is.
 * Also reads ISAPI_Rewrite 2 `httpd.ini` files, so existing rules keep working.
-* A `.htaccess` per site, plus one server-wide file. Changes apply without restarting IIS.
+* A rules file per site (`httpd.htaccess`, since NT's Explorer can't make `.htaccess`, though
+  that name works too). Changes apply without restarting IIS.
 * Small and auditable: the filter runs inside IIS, so it must never crash it.
 
 See [docs/spec.md](docs/spec.md) for what's supported, and
@@ -49,7 +50,7 @@ Requirements: Windows NT 4.0 (SP6a recommended) with IIS 4.0, any 486 or later C
 3. Open **Internet Service Manager** → a web site's **Properties** → **URL Magic**. If the tab
    isn't there, enable it once: **Console → Add/Remove Snap-in → Extensions**, choose
    *Internet Information Server*, tick **URL Magic**, OK, then **Console → Save**.
-4. Put a `.htaccess` in a web site's home directory (see the example above). Changes are
+4. Put an `httpd.htaccess` in a web site's home directory (see the example above). Changes are
    picked up within a couple of seconds; no restart needed.
 
 Each web site's **Properties → URL Magic** tab turns rewriting on or off and chooses the

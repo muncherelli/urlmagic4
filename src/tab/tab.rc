@@ -41,7 +41,7 @@ BEGIN
 
     GROUPBOX        "Rules format", IDC_FMT_GROUP, 7, 38, 238, 52
     AUTORADIOBUTTON "A&utomatic (by file name)", IDC_FMT_AUTO, 14, 50, 224, 10, WS_GROUP | WS_TABSTOP
-    AUTORADIOBUTTON "&Apache mod_rewrite (.htaccess)", IDC_FMT_HTACCESS, 14, 62, 224, 10
+    AUTORADIOBUTTON "&Apache mod_rewrite (httpd.htaccess or .htaccess)", IDC_FMT_HTACCESS, 14, 62, 224, 10
     AUTORADIOBUTTON "&ISAPI_Rewrite 2 (httpd.ini)", IDC_FMT_HTTPDINI, 14, 74, 224, 10
 
     GROUPBOX        "Rules file", IDC_SRC_GROUP, 7, 96, 238, 66

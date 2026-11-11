@@ -2,7 +2,7 @@
 
 What urlmagic4 does. It reads rules in two formats; use whichever you prefer:
 
-* **Apache mod_rewrite** (`.htaccess` style), the default, described on this page. Rules from
+* **Apache mod_rewrite** (`httpd.htaccess` or `.htaccess`), the default, described on this page. Rules from
   Apache documentation and tutorials work with little or no change. Behaviour follows the
   Apache httpd documentation for mod_rewrite; where this spec says "as Apache", that document
   is the reference. urlmagic4 implements a subset, listed below.
@@ -41,30 +41,39 @@ RewriteRule ^(.*)$ index.cfm?page=$1 [L,QSA]
 | File | Where | Applies to |
 |---|---|---|
 | Server (later) | `urlmagic4.conf` **or** `httpd.ini` in the folder holding `urlmagic4.dll` | every site, runs first |
-| Site | `.htaccess` **or** `httpd.ini` in the site's home directory (physical root) | that site |
+| Site | `httpd.htaccess`, `.htaccess` **or** `httpd.ini` in the site's home directory (physical root) | that site |
 
-* The file name picks the format: `.htaccess` and `urlmagic4.conf` are Apache style,
-  `httpd.ini` is ISAPI_Rewrite 2 style. So the server file and a site can use different
-  formats.
-* One file per place: if both exist in the same folder, the Apache-style file is used and a
-  warning is logged.
+* The file name picks the format:
+
+  | Name | Format |
+  |---|---|
+  | `httpd.htaccess`, `.htaccess` (and `urlmagic4.conf`) | Apache mod_rewrite |
+  | `httpd.ini` | ISAPI_Rewrite 2 |
+  | `nginx.conf` | reserved for nginx-style rules (later) |
+
+  `httpd.htaccess` exists because NT 4.0's Explorer won't create a file whose name starts
+  with a dot (Notepad's *Save As* with the name in quotes, or `ren`, can). `.htaccess` is read
+  too, so files copied from Apache sites work unchanged.
+* One file per place: the first that exists of `httpd.htaccess`, `.htaccess`, `httpd.ini`
+  (a format chosen in the site's tab narrows that to its own names).
 * Apache style: `#` starts a comment; blank lines ignored; a trailing `\` continues a line.
 * A file is re-read when it changes (checked at most once per second per file); no restart.
 * Errors are written to `urlmagic4.log` next to the DLL, with file and line (rotated at 1 MB
   to `urlmagic4.log.old`). A bad line is skipped; the rest of the file still loads.
-* The filter always refuses requests for `.htaccess`, `urlmagic4.conf`, `httpd.ini` and
-  `httpd.parse.errors` (any folder, any case) with 403, so rule files can't be downloaded.
-* 4.0 reads `.htaccess` only in the site root. **Planned:** a `.htaccess` in any folder, applying
-  to that folder and below exactly as in Apache: its rules see the path relative to that
-  folder, `RewriteBase` defaults to it, and the deepest `.htaccess` with `RewriteEngine On`
-  is the one that runs (no inheritance unless `RewriteOptions Inherit`).
+* The filter always refuses requests for `httpd.htaccess`, `.htaccess`, `httpd.ini`,
+  `httpd.parse.errors`, `nginx.conf` and `urlmagic4.conf` (any folder, any case) with 403, so
+  rule files can't be downloaded.
+* 4.0 reads the rules file only in the site root. **Planned:** an `httpd.htaccess`/`.htaccess`
+  in any folder, applying to that folder and below exactly as in Apache: its rules see the
+  path relative to that folder, `RewriteBase` defaults to it, and the deepest one with
+  `RewriteEngine On` is the one that runs (no inheritance unless `RewriteOptions Inherit`).
 
 ### Sites on network shares
 
 IIS runs filters as LocalSystem, which has no network credentials. For a site whose home
 directory is a UNC share (e.g. a dev site served from Samba):
 
-* its `.htaccess` can't be read there: keep the rules on the server's disk and pick that file
+* its rules file can't be read there: keep the rules on the server's disk and pick that file
   in the site's **URL Magic** tab (*In this file*).
 * `-f` / `-d` tests can't see its files and always report "missing". Exclude static folders
   by pattern instead (`RewriteRule ^assets/ - [L]`).
@@ -72,7 +81,7 @@ directory is a UNC share (e.g. a dev site served from Samba):
 ### Per-site settings (URL Magic tab)
 
 Each web site's Properties dialog in Internet Service Manager has a **URL Magic** tab:
-rewriting on/off, rules format (automatic by file name, `.htaccess`, `httpd.ini`), and rules
+rewriting on/off, rules format (automatic by file name, Apache, `httpd.ini`), and rules
 file (the site's home directory, or any file). Stored in
 `HKLM\SOFTWARE\urlmagic4\Sites\W3SVC\<site number>` (see `src/common/settings.h`); the filter
 re-reads it every few seconds.
@@ -88,7 +97,7 @@ re-reads it every few seconds.
 | `Redirect` | `[status] URL-path URL` (prefix match, as Apache mod_alias) |
 | `RedirectMatch` | `[status] regex URL` |
 
-Later: `RewriteMap`, `RewriteOptions`, per-folder `.htaccess` files. `<IfModule>` wrapper lines
+Later: `RewriteMap`, `RewriteOptions`, per-folder rules files. `<IfModule>` wrapper lines
 are ignored and what's inside is read, so copied files still load.
 
 ## 5. Matching
@@ -98,7 +107,7 @@ are ignored and what's inside is read, so copied files still load.
   The server file sees the same (with a leading `/`, as Apache server context).
 * Patterns are PCRE (Perl-compatible) regexes, not anchored unless you write `^`/`$`.
   A leading `!` negates the pattern (then no `$N` groups).
-* Rules run once, top to bottom: server file first (later), then the site's `.htaccess`.
+* Rules run once, top to bottom: server file first (later), then the site's rules file.
   Unlike Apache's per-directory mode, a rewritten URL is **not** run through the rules again,
   so `[L]` really is the last rule and front-controller rules can't loop, even where `-f`
   can't see the files (network shares). `[END]` behaves like `[L]`.

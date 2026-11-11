@@ -1022,8 +1022,8 @@ static int install(const WCHAR *dir)
         "     No tab? Enable it once: Console > Add/Remove Snap-in > Extensions,\r\n"
         "     Internet Information Server, tick URL Magic, OK, then Console > Save.\r\n");
     color(C_WHITE); out("  2. ");
-    color(C_GREY); out("Put a ");
-    color(C_WHITE); out(".htaccess"); color(C_GREY); out(" in a web site's home directory, e.g.\r\n\r\n");
+    color(C_GREY); out("Put an ");
+    color(C_WHITE); out("httpd.htaccess"); color(C_GREY); out(" in a web site's home directory, e.g.\r\n\r\n");
     color(C_CYAN);
     out("       RewriteEngine On\r\n"
         "       RewriteCond %{REQUEST_FILENAME} !-f\r\n"
@@ -1462,7 +1462,7 @@ static void tui_result(BOOL installing, BOOL purge, const WCHAR *dir)
         put(STEP_X + 3, y++, A_TEXT, "Internet Service Manager > a web site's Properties > URL Magic.");
         put(STEP_X + 3, y++, A_TEXT, "No tab? Console > Add/Remove Snap-in > Extensions: tick URL Magic.");
         put(STEP_X, y, A_BRIGHT, "2.");
-        put(STEP_X + 3, y++, A_TEXT, "Put rules in a .htaccess in the site's home directory, e.g.");
+        put(STEP_X + 3, y++, A_TEXT, "Put rules in httpd.htaccess in the site's home directory, e.g.");
         put(STEP_X + 6, y++, ON_BLUE(C_CYAN), "RewriteEngine On");
         put(STEP_X + 6, y++, ON_BLUE(C_CYAN), "RewriteRule ^old-page$ /new-page [R=301,L]");
         WideCharToMultiByte(CP_OEMCP, 0, dir, -1, d, MAX_PATH, NULL, NULL);

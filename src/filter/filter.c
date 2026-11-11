@@ -3,7 +3,7 @@
  * server Properties > WWW Service > Edit > ISAPI Filters).
  *
  * For every request, before IIS maps the URL to a file:
- *   1. refuse requests for rule files (.htaccess, httpd.ini, ...) with 403;
+ *   1. refuse requests for rule files (httpd.htaccess, .htaccess, httpd.ini, ...) with 403;
  *   2. look up the site's settings (written by the URL Magic tab, ../common/settings.h);
  *   3. load its rules file (cached; reloaded when the file changes);
  *   4. run the rewrite engine and rewrite the URL, redirect, or refuse.
@@ -298,16 +298,19 @@ static rules_ref *site_rules(DWORD id, char *home_a, size_t home_cap, BOOL *debu
         if (s->cfg.source == UM_SRC_FILE) {
             lstrcpynW(path, s->cfg.rules_file, MAX_PATH);
         } else if (s->home[0]) {
-            /* Automatic: .htaccess, or httpd.ini if there's no .htaccess */
-            lstrcpynW(path, s->home, MAX_PATH - 16);
-            lstrcatW(path, s->cfg.format == UM_FMT_HTTPDINI ? L"\\httpd.ini" : L"\\.htaccess");
-            if (s->cfg.format == UM_FMT_AUTO && GetFileAttributesW(path) == 0xFFFFFFFF) {
-                lstrcpynW(path, s->home, MAX_PATH - 16);
-                lstrcatW(path, L"\\httpd.ini");
-                if (GetFileAttributesW(path) == 0xFFFFFFFF) {
-                    lstrcpynW(path, s->home, MAX_PATH - 16);
-                    lstrcatW(path, L"\\.htaccess");
-                }
+            /* the first of these that exists (Automatic tries all three; a chosen
+               format only its own names) */
+            static const WCHAR *names[] = { L"\\httpd.htaccess", L"\\.htaccess", L"\\httpd.ini" };
+            int first = s->cfg.format == UM_FMT_HTTPDINI ? 2 : 0;
+            int last = s->cfg.format == UM_FMT_HTACCESS ? 1 : 2, i;
+            for (i = first; i <= last; i++) {
+                lstrcpynW(path, s->home, MAX_PATH - 20);
+                lstrcatW(path, names[i]);
+                if (GetFileAttributesW(path) != 0xFFFFFFFF) break;
+            }
+            if (i > last) {                     /* none: watch the first name */
+                lstrcpynW(path, s->home, MAX_PATH - 20);
+                lstrcatW(path, names[first]);
             }
         } else {
             path[0] = 0;
@@ -432,7 +435,8 @@ static const char *redirect_status(int code)
 /* the last path segment of url names a rules file? (decoded, any case) */
 static BOOL is_rules_file(const char *url)
 {
-    static const char *names[] = { ".htaccess", "httpd.ini", "httpd.parse.errors", "urlmagic4.conf", NULL };
+    static const char *names[] = { ".htaccess", "httpd.htaccess", "httpd.ini", "httpd.parse.errors",
+                                   "nginx.conf", "urlmagic4.conf", NULL };
     char seg[64];
     const char *s = url, *last = url;
     size_t j = 0;
