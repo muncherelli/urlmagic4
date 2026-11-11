@@ -976,13 +976,22 @@ static int install(const WCHAR *dir)
     CreateDirectoryW(dir, NULL);
     for (i = 0; FILES[i]; i++) {
         DWORD e;
+        int tries;
         join(to, dir, FILES[i]);
-        if ((e = extract(FILE_IDS[i], to)) != 0) {
+        /* IIS can hold the old filter DLL for a while after the service says it has
+           stopped: keep trying for up to a minute */
+        for (tries = 0; (e = extract(FILE_IDS[i], to)) == ERROR_SHARING_VIOLATION && tries < 120; tries++) {
+            spin();
+            Sleep(250);
+            spin();
+            Sleep(250);
+        }
+        if (e != 0) {
             char path[MAX_PATH];
             fail("can't write a file", e);
             WideCharToMultiByte(CP_OEMCP, 0, to, -1, path, MAX_PATH, NULL, NULL);
             msg(path, C_RED);
-            if (e == ERROR_SHARING_VIOLATION) note("It's in use: close Internet Service Manager and run setup again.");
+            if (e == ERROR_SHARING_VIOLATION) note("It's still in use after a minute: close Internet Service Manager and run setup again.");
             if (running) www(TRUE, NULL);
             return 1;
         }
