@@ -38,21 +38,23 @@ FONT 8, "MS Sans Serif"
 BEGIN
     AUTOCHECKBOX    "&Enable URL rewriting for this site", IDC_ENABLED, 7, 7, 238, 10
 
-    GROUPBOX        "Rules format", IDC_FMT_GROUP, 7, 23, 238, 52
+    GROUPBOX        "Rules format", IDC_FMT_GROUP, 7, 23, 238, 64
     AUTORADIOBUTTON "A&utomatic (by file name)", IDC_FMT_AUTO, 14, 35, 224, 10, WS_GROUP | WS_TABSTOP
     AUTORADIOBUTTON "&Apache mod_rewrite (httpd.htaccess or .htaccess)", IDC_FMT_HTACCESS, 14, 47, 224, 10
     AUTORADIOBUTTON "&ISAPI_Rewrite 2 (httpd.ini)", IDC_FMT_HTTPDINI, 14, 59, 224, 10
+    /* not finished yet: shown, but can't be chosen */
+    AUTORADIOBUTTON "nginx rewrite (nginx.conf), coming soon", IDC_FMT_NGINX, 14, 71, 224, 10, WS_DISABLED
 
-    GROUPBOX        "Rules file", IDC_SRC_GROUP, 7, 81, 238, 66
-    AUTORADIOBUTTON "In the site's &home directory", IDC_SRC_DOCROOT, 14, 93, 224, 10, WS_GROUP | WS_TABSTOP
-    AUTORADIOBUTTON "In this &file:", IDC_SRC_FILE, 14, 107, 224, 10
-    EDITTEXT        IDC_FILE, 24, 122, 158, 13, ES_AUTOHSCROLL | WS_GROUP | WS_TABSTOP
-    PUSHBUTTON      "&Browse...", IDC_BROWSE, 188, 121, 50, 14
+    GROUPBOX        "Rules file", IDC_SRC_GROUP, 7, 93, 238, 66
+    AUTORADIOBUTTON "In the site's &home directory", IDC_SRC_DOCROOT, 14, 105, 224, 10, WS_GROUP | WS_TABSTOP
+    AUTORADIOBUTTON "In this &file:", IDC_SRC_FILE, 14, 119, 224, 10
+    EDITTEXT        IDC_FILE, 24, 134, 158, 13, ES_AUTOHSCROLL | WS_GROUP | WS_TABSTOP
+    PUSHBUTTON      "&Browse...", IDC_BROWSE, 188, 133, 50, 14
 
-    AUTOCHECKBOX    "&Debug: log every request and how long the rules took", IDC_DEBUG, 7, 153, 238, 10
+    AUTOCHECKBOX    "&Debug: log every request and how long the rules took", IDC_DEBUG, 7, 165, 238, 10
 
-    LTEXT           "Use ""In this file"" for a site whose home directory is a network share: IIS can't read rules from there. Changes take effect on the next request; no IIS restart needed. The log is urlmagic4.log in the urlmagic folder.", -1, 7, 169, 238, 30
+    LTEXT           "Changes take effect on the next request; no IIS restart needed. The log is urlmagic4.log in the urlmagic folder.", -1, 7, 181, 238, 20
 
     /* only shown if the settings couldn't be read */
-    LTEXT           "", IDC_SITE, 7, 203, 238, 10, NOT WS_VISIBLE
+    LTEXT           "", IDC_SITE, 7, 204, 238, 10, NOT WS_VISIBLE
 END
