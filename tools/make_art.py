@@ -2,7 +2,7 @@
 """Draw urlmagic4's artwork from the pixel art below (no image libraries needed):
 
   res/urlmagic4.ico   16x16 + 32x32, 16 colours (what NT 4.0 can show)
-  docs/logo.png       README banner: the icon and "URL MAGIC 4" on a Windows 95-style panel
+  docs/logo.png       README picture: the URL Magic tab as IIS 4's Properties dialog shows it
 
 Run from the repo root:  python3 tools/make_art.py
 """
@@ -36,19 +36,43 @@ ICON = [
     "..K..........R..",
 ]
 
-# 5 x 7 pixel font for the banner title
-FONT = {
-    "U": ["X...X", "X...X", "X...X", "X...X", "X...X", "X...X", ".XXX."],
-    "R": ["XXXX.", "X...X", "X...X", "XXXX.", "X.X..", "X..X.", "X...X"],
-    "L": ["X....", "X....", "X....", "X....", "X....", "X....", "XXXXX"],
-    "M": ["X...X", "XX.XX", "X.X.X", "X.X.X", "X...X", "X...X", "X...X"],
+# Small proportional pixel font in the spirit of MS Sans Serif 8: 9 rows (7 above the
+# baseline, 2 for descenders), "X" = ink.
+GLYPHS = {
     "A": [".XXX.", "X...X", "X...X", "XXXXX", "X...X", "X...X", "X...X"],
-    "G": [".XXX.", "X...X", "X....", "X.XXX", "X...X", "X...X", ".XXXX"],
-    "I": [".XXX.", "..X..", "..X..", "..X..", "..X..", "..X..", ".XXX."],
     "C": [".XXX.", "X...X", "X....", "X....", "X....", "X...X", ".XXX."],
+    "E": ["XXXX", "X...", "X...", "XXX.", "X...", "X...", "XXXX"],
+    "H": ["X...X", "X...X", "X...X", "XXXXX", "X...X", "X...X", "X...X"],
+    "L": ["X...", "X...", "X...", "X...", "X...", "X...", "XXXX"],
+    "M": ["X...X", "XX.XX", "X.X.X", "X.X.X", "X...X", "X...X", "X...X"],
+    "P": ["XXXX.", "X...X", "X...X", "XXXX.", "X....", "X....", "X...."],
+    "R": ["XXXX.", "X...X", "X...X", "XXXX.", "X.X..", "X..X.", "X...X"],
+    "T": ["XXXXX", "..X..", "..X..", "..X..", "..X..", "..X..", "..X.."],
+    "U": ["X...X", "X...X", "X...X", "X...X", "X...X", "X...X", ".XXX."],
     "4": ["...X.", "..XX.", ".X.X.", "X..X.", "XXXXX", "...X.", "...X."],
-    " ": ["...", "...", "...", "...", "...", "...", "..."],
+    "a": [".....", ".....", ".XXX.", "....X", ".XXXX", "X...X", ".XXXX"],
+    "b": ["X....", "X....", "XXXX.", "X...X", "X...X", "X...X", "XXXX."],
+    "c": ["....", "....", ".XXX", "X...", "X...", "X...", ".XXX"],
+    "d": ["....X", "....X", ".XXXX", "X...X", "X...X", "X...X", ".XXXX"],
+    "e": [".....", ".....", ".XXX.", "X...X", "XXXXX", "X....", ".XXX."],
+    "f": ["..XX", ".X..", "XXX.", ".X..", ".X..", ".X..", ".X.."],
+    "g": [".....", ".....", ".XXXX", "X...X", "X...X", "X...X", ".XXXX", "....X", ".XXX."],
+    "h": ["X....", "X....", "XXXX.", "X...X", "X...X", "X...X", "X...X"],
+    "i": ["X", ".", "X", "X", "X", "X", "X"],
+    "l": ["X", "X", "X", "X", "X", "X", "X"],
+    "m": [".....", ".....", "XXXX.", "X.X.X", "X.X.X", "X.X.X", "X.X.X"],
+    "n": [".....", ".....", "XXXX.", "X...X", "X...X", "X...X", "X...X"],
+    "o": [".....", ".....", ".XXX.", "X...X", "X...X", "X...X", ".XXX."],
+    "r": ["....", "....", "X.XX", "XX..", "X...", "X...", "X..."],
+    "s": ["....", "....", ".XXX", "X...", ".XX.", "...X", "XXX."],
+    "t": [".X..", ".X..", "XXX.", ".X..", ".X..", ".X..", "..XX"],
+    "u": [".....", ".....", "X...X", "X...X", "X...X", "X...X", ".XXXX"],
+    "w": [".....", ".....", "X...X", "X...X", "X.X.X", "X.X.X", ".X.X."],
+    " ": ["..", "..", "..", "..", "..", "..", ".."],
 }
+
+# Windows 95 check mark (7 x 7)
+CHECK = ["......X", ".....XX", "X...XXX", "XX.XXX.", "XXXXX..", ".XXX...", "..X...."]
 
 
 def scale(art, f):
@@ -104,49 +128,99 @@ def write_png(path, pixels):
                 + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
 
 
+def text_width(text):
+    return sum(len(GLYPHS[c][0]) + 1 for c in text) - 1
+
+
+def draw_text(px, x, y, text, colour):
+    """y = top of a capital letter"""
+    for c in text:
+        g = GLYPHS[c]
+        for gy, row in enumerate(g):
+            for gx, bit in enumerate(row):
+                if bit == "X":
+                    px[y + gy][x + gx] = colour
+        x += len(g[0]) + 1
+
+
 def banner():
-    """Canvas in 'art pixels', scaled up at the end."""
-    grey, white, shadow, dark, navy, red = (PALETTE[7], PALETTE[15], PALETTE[8], PALETTE[0],
-                                            PALETTE[4], PALETTE[9])
-    icon = scale(ICON, 2)                      # 32 x 32
-    title = "URL MAGIC 4"
-    tscale = 2
-    glyphs = [FONT[c] for c in title]
-    text_w = sum((len(g[0]) + 1) * tscale for g in glyphs) - tscale
-    pad, gap = 6, 8
-    w = pad + len(icon[0]) + gap + text_w + pad
-    h = pad + len(icon) + pad
+    """The URL Magic tab as IIS 4's site Properties dialog shows it, at 1:1 pixels, then
+    scaled up. Neighbouring tabs for context; the page shows the tab's first control."""
+    grey, white, shadow, black = PALETTE[7], PALETTE[15], PALETTE[8], PALETTE[0]
+    tabs = ["HTTP Headers", "Custom Errors", "URL Magic"]      # the last one is selected
+    label = "Enable URL rewriting for this site"
+
+    widths = [text_width(t) + 12 for t in tabs]
+    widths[-1] += 16 + 3                                         # icon + gap
+    page_top = 22
+    w = max(4 + sum(widths) + 40, 4 + 12 + 13 + 4 + text_width(label) + 16)
+    h = page_top + 32
     px = [[grey] * w for _ in range(h)]
 
-    # Windows 95 raised panel: white top/left, dark bottom/right
-    for x in range(w):
-        px[0][x] = white
-        px[h - 1][x] = dark
-        px[h - 2][x] = shadow if 0 < x < w - 1 else px[h - 2][x]
-    for y in range(h):
-        px[y][0] = white
-        px[y][w - 1] = dark
-        if 0 < y < h - 1:
-            px[y][w - 2] = shadow
+    def hline(y, x0, x1, c):
+        for x in range(x0, x1 + 1):
+            px[y][x] = c
 
-    for y, row in enumerate(icon):
-        for x, ch in enumerate(row):
-            if ch != ".":
-                px[pad + y][pad + x] = PALETTE[KEY[ch]]
+    def vline(x, y0, y1, c):
+        for y in range(y0, y1 + 1):
+            px[y][x] = c
 
-    x0 = pad + len(icon[0]) + gap
-    y0 = (h - 7 * tscale) // 2
-    for c, g in zip(title, glyphs):
-        colour = red if c == "4" else navy
-        for gy, grow in enumerate(g):
-            for gx, bit in enumerate(grow):
-                if bit == "X":
-                    for dy in range(tscale):
-                        for dx in range(tscale):
-                            px[y0 + gy * tscale + dy][x0 + gx * tscale + dx] = colour
-        x0 += (len(g[0]) + 1) * tscale
+    # the page: raised panel
+    left, right, bottom = 2, w - 3, h - 3
+    hline(page_top, left, right, white)
+    vline(left, page_top, bottom, white)
+    hline(bottom, left, right, black)
+    hline(bottom - 1, left + 1, right - 1, shadow)
+    vline(right, page_top, bottom, black)
+    vline(right - 1, page_top + 1, bottom - 1, shadow)
 
-    f = 4                                      # final pixel size
+    # the tabs
+    x = left
+    for i, (t, tw) in enumerate(zip(tabs, widths)):
+        selected = i == len(tabs) - 1
+        x0, x1 = (x - 2, x + tw + 1) if selected else (x, x + tw - 1)
+        top = page_top - 19 if selected else page_top - 17
+        if selected:
+            hline(page_top, x0 + 1, x1 - 1, grey)               # the tab joins the page
+            for y in range(top + 1, page_top + 1):
+                hline(y, x0 + 1, x1 - 2, grey)
+        hline(top, x0 + 2, x1 - 2, white)
+        px[top + 1][x0 + 1] = white
+        vline(x0, top + 2, page_top - (0 if selected else 1), white)
+        px[top + 1][x1 - 1] = black
+        vline(x1, top + 2, page_top - (0 if selected else 1), black)
+        vline(x1 - 1, top + 1, page_top - (0 if selected else 1), shadow)
+        tx = x0 + 6 + (2 if selected else 0)
+        ty = top + 5
+        if selected:
+            for iy, row in enumerate(ICON):
+                for ix, ch in enumerate(row):
+                    if ch != ".":
+                        px[top + 2 + iy][tx + ix] = PALETTE[KEY[ch]]
+            tx += 16 + 3
+            ty = top + 7
+        draw_text(px, tx, ty, t, black)
+        x += tw
+
+    # first control on the page: a ticked checkbox
+    cx, cy = left + 10, page_top + 10
+    hline(cy, cx, cx + 12, shadow)
+    vline(cx, cy, cy + 12, shadow)
+    hline(cy + 1, cx + 1, cx + 11, black)
+    vline(cx + 1, cy + 1, cy + 11, black)
+    hline(cy + 12, cx, cx + 12, white)
+    vline(cx + 12, cy, cy + 12, white)
+    hline(cy + 11, cx + 1, cx + 11, grey)
+    vline(cx + 11, cy + 1, cy + 11, grey)
+    for y in range(cy + 2, cy + 11):
+        hline(y, cx + 2, cx + 10, white)
+    for gy, row in enumerate(CHECK):
+        for gx, bit in enumerate(row):
+            if bit == "X":
+                px[cy + 3 + gy][cx + 3 + gx] = black
+    draw_text(px, cx + 13 + 4, cy + 3, label, black)
+
+    f = 3                                                       # final pixel size
     return [[p for p in row for _ in range(f)] for row in px for _ in range(f)]
 
 

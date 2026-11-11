@@ -4,7 +4,7 @@
  *
  * For every request, before IIS maps the URL to a file:
  *   1. refuse requests for rule files (.htaccess, httpd.ini, ...) with 403;
- *   2. look up the site's settings (written by the URL Magic 4 tab, ../common/settings.h);
+ *   2. look up the site's settings (written by the URL Magic tab, ../common/settings.h);
  *   3. load its rules file (cached; reloaded when the file changes);
  *   4. run the rewrite engine and rewrite the URL, redirect, or refuse.
  *

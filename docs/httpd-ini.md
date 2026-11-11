@@ -26,7 +26,7 @@ hooks, per-site settings), see [spec.md](spec.md).
 * The filter itself always refuses requests for `httpd.ini` and `httpd.parse.errors`
   (any directory, any case) with 404, so site rule files can never be downloaded.
 
-Sites on network shares: as in [spec.md](spec.md), the site's URL Magic 4 tab can point it at
+Sites on network shares: as in [spec.md](spec.md), the site's URL Magic tab can point it at
 a rules file on the server's own disk.
 
 ## 2. Directives

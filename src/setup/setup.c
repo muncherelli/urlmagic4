@@ -10,7 +10,7 @@
  * all you need. It also copies itself into the install folder, to uninstall later.
  *
  * Installing: stops the WWW service, copies urlmagic4.dll and urlmagic4tab.dll, registers
- * the URL Magic 4 tab, adds urlmagic4 to IIS's global ISAPI filters, starts the WWW service.
+ * the URL Magic tab, adds urlmagic4 to IIS's global ISAPI filters, starts the WWW service.
  */
 #define WIN32_LEAN_AND_MEAN
 #define CINTERFACE
@@ -381,7 +381,7 @@ static int install(const WCHAR *dir)
     ok();
     record_dir(dir);
 
-    step("Registering the URL Magic 4 tab");
+    step("Registering the URL Magic tab");
     join(to, dir, L"urlmagic4tab.dll");
     if (tab_register(to, TRUE)) ok();
 
@@ -395,14 +395,14 @@ static int install(const WCHAR *dir)
     if (g_errors) { out("\r\nSetup finished with errors (see above).\r\n"); return 1; }
     out("\r\nDone. Two things to do by hand:\r\n\r\n"
         "  1. Show the tab: open Internet Service Manager, Console > Add/Remove Snap-in >\r\n"
-        "     Extensions, choose Internet Information Server, tick URL Magic 4, OK,\r\n"
+        "     Extensions, choose Internet Information Server, tick URL Magic, OK,\r\n"
         "     then Console > Save.\r\n"
         "  2. Add rules: a .htaccess file in a web site's home directory, e.g.\r\n\r\n"
         "       RewriteEngine On\r\n"
         "       RewriteCond %{REQUEST_FILENAME} !-f\r\n"
         "       RewriteCond %{REQUEST_FILENAME} !-d\r\n"
         "       RewriteRule ^(.*)$ index.cfm?page=$1 [L,QSA]\r\n\r\n"
-        "     Each site's Properties > URL Magic 4 tab chooses the format and file.\r\n\r\n"
+        "     Each site's Properties > URL Magic tab chooses the format and file.\r\n\r\n"
         "Problems with rules are logged to ");
     join(to, dir, L"urlmagic4.log");
     outw(to);
@@ -444,7 +444,7 @@ static int uninstall(BOOL purge)
     step("Removing the urlmagic4 ISAPI filter from IIS");
     if (filter_unregister()) ok();
 
-    step("Unregistering the URL Magic 4 tab");
+    step("Unregistering the URL Magic tab");
     join(f, dir, L"urlmagic4tab.dll");
     if (tab_register(f, FALSE)) ok();
 

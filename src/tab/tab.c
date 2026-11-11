@@ -41,7 +41,7 @@ static const IID IID_UmUnknown =
 static const IID IID_UmClassFactory =
     {0x00000001, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
 
-static const WCHAR TAB_NAME[] = L"URL Magic 4";
+static const WCHAR TAB_NAME[] = L"URL Magic";
 static const WCHAR MMC_SNAPINS[]   = L"Software\\Microsoft\\MMC\\SnapIns";
 static const WCHAR MMC_NODETYPES[] = L"Software\\Microsoft\\MMC\\NodeTypes";
 
@@ -288,7 +288,7 @@ static INT_PTR CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             r = save_site(ps);
             if (r != ERROR_SUCCESS) {
                 WCHAR line[200];
-                wsprintfW(line, L"Couldn't save the URL Magic 4 settings (error %ld).", r);
+                wsprintfW(line, L"Couldn't save the URL Magic settings (error %ld).", r);
                 MessageBoxW(dlg, line, TAB_NAME, MB_OK | MB_ICONERROR);
                 SetWindowLongPtrW(dlg, DWLP_MSGRESULT, PSNRET_INVALID_NOCHANGEPAGE);
                 return TRUE;

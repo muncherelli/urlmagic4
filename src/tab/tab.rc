@@ -13,7 +13,7 @@ BEGIN
         BLOCK "040904B0"
         BEGIN
             VALUE "CompanyName",      "urlmagic4 contributors\0"
-            VALUE "FileDescription",  "URL Magic 4 tab for Internet Service Manager\0"
+            VALUE "FileDescription",  "URL Magic tab for Internet Service Manager\0"
             VALUE "FileVersion",      UM_VERSION_STR "\0"
             VALUE "InternalName",     "urlmagic4tab\0"
             VALUE "LegalCopyright",   "MIT License\0"
@@ -33,7 +33,7 @@ IDI_TAB ICON "../../res/urlmagic4.ico"
 /* 252 x 218 dialog units: the size of IIS 4's own property pages */
 IDD_SITE DIALOG 0, 0, 252, 218
 STYLE WS_CHILD | WS_DISABLED | WS_CAPTION
-CAPTION "URL Magic 4"
+CAPTION "URL Magic"
 FONT 8, "MS Sans Serif"
 BEGIN
     LTEXT           "", IDC_SITE, 7, 7, 238, 10

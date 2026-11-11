@@ -61,13 +61,13 @@ IIS runs filters as LocalSystem, which has no network credentials. For a site wh
 directory is a UNC share (e.g. a dev site served from Samba):
 
 * its `.htaccess` can't be read there: keep the rules on the server's disk and pick that file
-  in the site's **URL Magic 4** tab (*In this file*).
+  in the site's **URL Magic** tab (*In this file*).
 * `-f` / `-d` tests can't see its files and always report "missing". Exclude static folders
   by pattern instead (`RewriteRule ^assets/ - [L]`).
 
-### Per-site settings (URL Magic 4 tab)
+### Per-site settings (URL Magic tab)
 
-Each web site's Properties dialog in Internet Service Manager has a **URL Magic 4** tab:
+Each web site's Properties dialog in Internet Service Manager has a **URL Magic** tab:
 rewriting on/off, rules format (automatic by file name, `.htaccess`, `httpd.ini`), and rules
 file (the site's home directory, or any file). Stored in
 `HKLM\SOFTWARE\urlmagic4\Sites\W3SVC\<site number>` (see `src/common/settings.h`); the filter

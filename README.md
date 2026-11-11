@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/logo.png" alt="URL Magic 4" width="464"></p>
+<p align="center"><img src="docs/logo.png" alt="The URL Magic tab in IIS 4.0's web site Properties" width="570"></p>
 
 # urlmagic4
 
@@ -44,16 +44,16 @@ Requirements: Windows NT 4.0 (SP6a recommended) with IIS 4.0, any 486 or later C
    ```
 
    It's a console program. It stops the WWW service, unpacks everything (and a copy of itself) to
-   `%SystemDrive%\urlmagic4`, registers the URL Magic 4 tab, adds urlmagic4 to IIS's ISAPI
+   `%SystemDrive%\urlmagic4`, registers the URL Magic tab, adds urlmagic4 to IIS's ISAPI
    filters and starts the WWW service again, printing each step.
    (`urlmagic4-v4.0.0 install D:\some\folder` installs elsewhere.)
 3. Show the tab, once: open **Internet Service Manager**, **Console → Add/Remove Snap-in →
-   Extensions**, choose *Internet Information Server*, tick **URL Magic 4**, OK, then
+   Extensions**, choose *Internet Information Server*, tick **URL Magic**, OK, then
    **Console → Save**.
 4. Put a `.htaccess` in a web site's home directory (see the example above). Changes are
    picked up within a couple of seconds; no restart needed.
 
-Each web site's **Properties → URL Magic 4** tab turns rewriting on or off and chooses the
+Each web site's **Properties → URL Magic** tab turns rewriting on or off and chooses the
 rules format and file. Settings live in `HKLM\SOFTWARE\urlmagic4\Sites\W3SVC\<site number>`.
 Problems in rules files are written to `urlmagic4.log` in the install folder.
 
