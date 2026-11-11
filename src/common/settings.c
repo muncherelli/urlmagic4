@@ -9,6 +9,7 @@ void um_site_defaults(um_site *s)
     s->format = UM_FMT_AUTO;
     s->source = UM_SRC_DOCROOT;
     s->rules_file[0] = 0;
+    s->debug = 0;
 }
 
 static void site_key(WCHAR *out, const WCHAR *service, DWORD instance)
@@ -53,6 +54,10 @@ LONG um_site_read(HKEY hklm, const WCHAR *service, DWORD instance, um_site *s)
         buf[size / sizeof(WCHAR)] = 0;
         s->source = (DWORD)lookup(buf, SRC_NAMES, 2, UM_SRC_DOCROOT);
     }
+    size = sizeof dw;
+    if (RegQueryValueExW(k, L"Debug", NULL, &type, (BYTE *)&dw, &size) == ERROR_SUCCESS &&
+        type == REG_DWORD)
+        s->debug = dw ? 1 : 0;
     size = sizeof s->rules_file - sizeof(WCHAR);
     if (RegQueryValueExW(k, L"RulesFile", NULL, &type, (BYTE *)s->rules_file, &size) == ERROR_SUCCESS &&
         type == REG_SZ)
@@ -82,6 +87,8 @@ LONG um_site_write(HKEY hklm, const WCHAR *service, DWORD instance, const um_sit
     if (r == ERROR_SUCCESS) r = set_sz(k, L"Format", FMT_NAMES[s->format <= 2 ? s->format : 0]);
     if (r == ERROR_SUCCESS) r = set_sz(k, L"Source", SRC_NAMES[s->source <= 1 ? s->source : 0]);
     if (r == ERROR_SUCCESS) r = set_sz(k, L"RulesFile", s->rules_file);
+    dw = s->debug ? 1 : 0;
+    if (r == ERROR_SUCCESS) r = RegSetValueExW(k, L"Debug", 0, REG_DWORD, (const BYTE *)&dw, sizeof dw);
     RegCloseKey(k);
     return r;
 }

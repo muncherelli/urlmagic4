@@ -76,12 +76,21 @@ $(B)/$(SETUP_EXE): $(SETUP_OBJS)
 	  echo "error: $@ uses P6-only instructions"; rm -f $@; exit 1; fi
 $(B)/setup.o: src/setup/setup.c src/setup/payload.h $(B)/version.h | $(B)
 	$(CC) $(CFLAGS) -I $(B) -c -o $@ $<
+# docs for NT 4.0: .txt names, Windows-1252 and CRLF line endings, so Notepad shows them properly
+DOCS = $(B)/README.txt $(B)/LICENSE.txt $(B)/CHANGELOG.txt
+$(B)/README.txt: README.md tools/totxt.py | $(B)
+	python3 tools/totxt.py $< $@
+$(B)/LICENSE.txt: LICENSE tools/totxt.py | $(B)
+	python3 tools/totxt.py $< $@
+$(B)/CHANGELOG.txt: CHANGELOG.md tools/totxt.py | $(B)
+	python3 tools/totxt.py $< $@
+
 # the installer carries everything it installs
-$(B)/payload.rc: $(B)/urlmagic4.dll $(B)/urlmagic4tab.dll README.md LICENSE CHANGELOG.md | $(B)
+$(B)/payload.rc: $(B)/urlmagic4.dll $(B)/urlmagic4tab.dll $(DOCS) | $(B)
 	printf '%s RCDATA "%s"\n' \
 	  ID_FILTER_DLL '$(abspath $(B)/urlmagic4.dll)' ID_TAB_DLL '$(abspath $(B)/urlmagic4tab.dll)' \
-	  ID_README '$(abspath README.md)' ID_LICENSE '$(abspath LICENSE)' \
-	  ID_CHANGELOG '$(abspath CHANGELOG.md)' > $@
+	  ID_README '$(abspath $(B)/README.txt)' ID_LICENSE '$(abspath $(B)/LICENSE.txt)' \
+	  ID_CHANGELOG '$(abspath $(B)/CHANGELOG.txt)' > $@
 $(B)/setup.res.o: src/setup/setup.rc src/setup/payload.h res/urlmagic4.ico $(B)/version.h $(B)/payload.rc | $(B)
 	$(WINDRES) -O coff -I $(B) -I src/setup -o $@ $<
 
@@ -94,10 +103,10 @@ $(B)/settings.o: src/common/settings.c src/common/settings.h | $(B)
 $(B)/nocrt.o: src/common/nocrt.c | $(B)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-dist: all
+dist: all $(DOCS)
 	rm -rf $(B)/dist $(B)/urlmagic[0-9]*.zip
 	mkdir -p $(B)/dist
-	cp $(B)/$(SETUP_EXE) README.md LICENSE CHANGELOG.md $(B)/dist/
+	cp $(B)/$(SETUP_EXE) $(DOCS) $(B)/dist/
 	cd $(B)/dist && python3 -m zipfile -c ../urlmagic$(VERSION).zip *
 
 # ---- native tests of the rewrite engine (gcc + libc on Linux)

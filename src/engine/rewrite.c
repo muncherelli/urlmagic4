@@ -690,9 +690,10 @@ int um_apply(const um_rules *r, const char *url, const um_env *env, um_result *o
     state st;
     const char *q = strchr(url, '?');
     size_t plen = q ? (size_t)(q - url) : strlen(url);
-    int i, skip = 0, changed = 0;
+    int i, skip = 0, changed = 0, applied = 0;
 
     finish(out, UM_NONE, 0, NULL);
+    out->line = 0;
     if (!r || r->n == 0) return UM_NONE;
 
     memset(&st, 0, sizeof st);
@@ -725,6 +726,7 @@ int um_apply(const um_rules *r, const char *url, const um_env *env, um_result *o
                 (st.path[n] == 0 || st.path[n] == '/' || (n && ru->prefix[n - 1] == '/'))) {
                 sbuf b = {0};
                 char *u;
+                applied = ru->line;
                 if (ru->status == 410) { finish(out, UM_GONE, 410, NULL); goto done; }
                 sb_add(&b, ru->subst);
                 sb_add(&b, st.path + n);
@@ -741,6 +743,7 @@ int um_apply(const um_rules *r, const char *url, const um_env *env, um_result *o
             if (m < 0) goto done;
             if (m == 1) {
                 char *u;
+                applied = ru->line;
                 if (ru->status == 410) { finish(out, UM_GONE, 410, NULL); goto done; }
                 u = expand(&st, ru->subst, &rc, NULL);
                 if (!u) { st.failed = 1; goto done; }
@@ -771,6 +774,7 @@ int um_apply(const um_rules *r, const char *url, const um_env *env, um_result *o
             }
         }
 
+        applied = ru->line;
         if (ru->flags & F_F) { free(keep); finish(out, UM_FORBIDDEN, 403, NULL); goto done; }
         if (ru->flags & F_G) { free(keep); finish(out, UM_GONE, 410, NULL); goto done; }
 
@@ -841,6 +845,7 @@ int um_apply(const um_rules *r, const char *url, const um_env *env, um_result *o
     if (changed) finish(out, UM_REWRITE, 0, build_url(st.path, st.query, 0));
 
 done:
+    out->line = applied;
     if (st.failed) { free(out->url); finish(out, UM_FAIL, 500, NULL); }
     else if ((out->action == UM_REWRITE || out->action == UM_REDIRECT) && !out->url) finish(out, UM_FAIL, 500, NULL);
     if (st.orig_path != st.path) free((char *)st.orig_path);

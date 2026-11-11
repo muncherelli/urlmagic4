@@ -31,8 +31,8 @@ static const GUID IID_UmIMSAdminBase =
 static const WCHAR FILTER_NAME[] = L"urlmagic4";
 static const WCHAR FILTERS_KEY[] = L"/LM/W3SVC/Filters";
 /* installed files, in the order of their resource IDs (payload.h) */
-static const WCHAR *FILES[] = { L"urlmagic4.dll", L"urlmagic4tab.dll", L"README.md", L"LICENSE",
-                                L"CHANGELOG.md", NULL };
+static const WCHAR *FILES[] = { L"urlmagic4.dll", L"urlmagic4tab.dll", L"README.txt", L"LICENSE.txt",
+                                L"CHANGELOG.txt", NULL };
 static const int FILE_IDS[] = { ID_FILTER_DLL, ID_TAB_DLL, ID_README, ID_LICENSE, ID_CHANGELOG };
 
 static HANDLE g_out;
@@ -1111,6 +1111,13 @@ static int uninstall(BOOL purge)
         }
     }
     join(f, dir, L"urlmagic4.log");
+    DeleteFileW(f);
+    /* docs as named by early 4.0.0 builds */
+    join(f, dir, L"README.md");
+    DeleteFileW(f);
+    join(f, dir, L"CHANGELOG.md");
+    DeleteFileW(f);
+    join(f, dir, L"LICENSE");
     DeleteFileW(f);
     join(f, dir, L"urlmagic4.log.old");
     DeleteFileW(f);

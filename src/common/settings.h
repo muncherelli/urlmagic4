@@ -6,6 +6,7 @@
  *     Format     REG_SZ     "auto" | "htaccess" | "httpd.ini"           (default "auto")
  *     Source     REG_SZ     "docroot" | "file"                          (default "docroot")
  *     RulesFile  REG_SZ     full path of the rules file when Source = "file"
+ *     Debug      REG_DWORD  1 = log every request with timing to urlmagic4.log (default 0)
  *
  * A site without a key uses the defaults: rules from .htaccess or httpd.ini in its home
  * directory, format picked by file name.
@@ -25,6 +26,7 @@ typedef struct {
     DWORD format;                 /* UM_FMT_* */
     DWORD source;                 /* UM_SRC_* */
     WCHAR rules_file[MAX_PATH];
+    DWORD debug;                  /* log each request and its timing */
 } um_site;
 
 void um_site_defaults(um_site *s);

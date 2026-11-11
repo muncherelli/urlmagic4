@@ -189,7 +189,7 @@ static void update_controls(HWND dlg)
     BOOL on = IsDlgButtonChecked(dlg, IDC_ENABLED) == BST_CHECKED;
     BOOL file = IsDlgButtonChecked(dlg, IDC_SRC_FILE) == BST_CHECKED;
     static const int group[] = { IDC_FMT_GROUP, IDC_FMT_AUTO, IDC_FMT_HTACCESS, IDC_FMT_HTTPDINI,
-                                 IDC_SRC_GROUP, IDC_SRC_DOCROOT, IDC_SRC_FILE, 0 };
+                                 IDC_SRC_GROUP, IDC_SRC_DOCROOT, IDC_SRC_FILE, IDC_DEBUG, 0 };
     int i;
     for (i = 0; group[i]; i++) EnableWindow(GetDlgItem(dlg, group[i]), on);
     EnableWindow(GetDlgItem(dlg, IDC_FILE), on && file);
@@ -211,6 +211,7 @@ static void fill_page(HWND dlg, page_state *ps)
     CheckRadioButton(dlg, IDC_FMT_AUTO, IDC_FMT_HTTPDINI, IDC_FMT_AUTO + (int)ps->site.format);
     CheckRadioButton(dlg, IDC_SRC_DOCROOT, IDC_SRC_FILE, IDC_SRC_DOCROOT + (int)ps->site.source);
     SetDlgItemTextW(dlg, IDC_FILE, ps->site.rules_file);
+    CheckDlgButton(dlg, IDC_DEBUG, ps->site.debug ? BST_CHECKED : BST_UNCHECKED);
     SendDlgItemMessageW(dlg, IDC_FILE, EM_LIMITTEXT, MAX_PATH - 1, 0);
     update_controls(dlg);
     ps->loading = FALSE;
@@ -245,6 +246,7 @@ static BOOL read_page(HWND dlg, page_state *ps)
                IsDlgButtonChecked(dlg, IDC_FMT_HTTPDINI) == BST_CHECKED ? UM_FMT_HTTPDINI : UM_FMT_AUTO;
     s.source = IsDlgButtonChecked(dlg, IDC_SRC_FILE) == BST_CHECKED ? UM_SRC_FILE : UM_SRC_DOCROOT;
     GetDlgItemTextW(dlg, IDC_FILE, s.rules_file, MAX_PATH);
+    s.debug = IsDlgButtonChecked(dlg, IDC_DEBUG) == BST_CHECKED;
     if (s.enabled && s.source == UM_SRC_FILE && !s.rules_file[0]) {
         MessageBoxW(dlg, L"Enter the path of the rules file, or choose \"In the site's home directory\".",
                     TAB_NAME, MB_OK | MB_ICONEXCLAMATION);

@@ -163,6 +163,21 @@ int main(void)
     check_log("dangling cond", "RewriteEngine On\nRewriteCond %{HTTP_HOST} x\n", 1, 0);
     check_log("comments and blanks", "# hello\n\n   # indented\nRewriteEngine On\n", 0, 0);
 
+    /* the rules-file line of the rule that decided (for debug logging) */
+    {
+        const char *rules = "# comment\nRewriteEngine On\nRewriteRule ^x$ /y\nRewriteRule ^a$ /b [L]\n";
+        um_env env = { NULL, var, file_type };
+        um_rules *r = um_parse(rules, strlen(rules), UM_DIALECT_APACHE, NULL, NULL);
+        um_result res;
+        um_apply(r, "/a", &env, &res);
+        if (res.line == 4) passed++; else { failures++; printf("FAIL rule line: expected 4, got %d\n", res.line); }
+        um_result_free(&res);
+        um_apply(r, "/zzz", &env, &res);
+        if (res.line == 0) passed++; else { failures++; printf("FAIL rule line for no match: got %d\n", res.line); }
+        um_result_free(&res);
+        um_rules_free(r);
+    }
+
     printf("%d passed, %d failed\n", passed, failures);
     return failures ? 1 : 0;
 }

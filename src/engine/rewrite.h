@@ -36,6 +36,7 @@ typedef struct {
     int action;     /* UM_* */
     int status;     /* HTTP status for UM_REDIRECT (301, 302, 303, 307) */
     char *url;      /* new URL ("/path?query") for UM_REWRITE, Location for UM_REDIRECT */
+    int line;       /* rules-file line of the last rule that matched; 0 = none */
 } um_result;
 
 /* Bad lines are reported through log and skipped; returns NULL only when out of memory. */

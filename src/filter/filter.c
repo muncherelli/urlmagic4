@@ -257,13 +257,14 @@ static void refresh_rules(site *s, const WCHAR *path)
 }
 
 /* Find the site's rules (with a reference the caller must release), or NULL. */
-static rules_ref *site_rules(DWORD id, char *home_a, size_t home_cap)
+static rules_ref *site_rules(DWORD id, char *home_a, size_t home_cap, BOOL *debug)
 {
     site *s = NULL;
     rules_ref *out = NULL;
     int i;
 
     home_a[0] = 0;
+    *debug = FALSE;
     EnterCriticalSection(&g_lock);
     for (i = 0; i < MAX_SITES; i++)
         if (g_sites[i].id == id) { s = &g_sites[i]; break; }
@@ -284,6 +285,7 @@ static rules_ref *site_rules(DWORD id, char *home_a, size_t home_cap)
         s->cfg_at = GetTickCount();
         s->rules_at -= RULES_EVERY + 1;              /* settings may point elsewhere now */
     }
+    *debug = s->cfg.enabled && s->cfg.debug;
     if (!s->cfg.enabled) goto out;
     if (tick_since(s->home_at) > HOME_EVERY) {
         read_home(s);
@@ -467,6 +469,38 @@ BOOL WINAPI GetFilterVersion(HTTP_FILTER_VERSION *ver)
     return TRUE;
 }
 
+/* "site 3 debug: GET /old (Host dev.example.com) -> redirect 301 / by line 3, 42 us" */
+static void debug_line(request *rq, DWORD id, const um_result *res, LONGLONG ticks, LONGLONG freq)
+{
+    char m[URL_CAP * 2 + 200], method[16], host[128], what[URL_CAP + 40], took[40];
+    DWORD n;
+    ULONGLONG us = freq > 0 ? (ULONGLONG)ticks * 1000000u / (ULONGLONG)freq : 0;
+
+    n = sizeof method;
+    if (!rq->hdr->GetHeader(rq->pfc, "method", method, &n)) lstrcpyA(method, "?");
+    if (!server_var(rq, "HTTP_HOST", host, sizeof host)) lstrcpyA(host, "?");
+    switch (res->action) {
+    case UM_REWRITE:   wsprintfA(what, "rewrite to %s", res->url ? res->url : "?"); break;
+    case UM_REDIRECT:  wsprintfA(what, "redirect %d to %s", res->status, res->url ? res->url : "?"); break;
+    case UM_FORBIDDEN: lstrcpyA(what, "403 forbidden"); break;
+    case UM_GONE:      lstrcpyA(what, "410 gone"); break;
+    case UM_FAIL:      lstrcpyA(what, "500 (rules failed: regex too complex?)"); break;
+    default:           lstrcpyA(what, "unchanged"); break;
+    }
+    if (us < 10000) wsprintfA(took, "%lu us", (unsigned long)us);           /* microseconds */
+    else wsprintfA(took, "%lu.%03lu ms", (unsigned long)(us / 1000), (unsigned long)(us % 1000));
+    if (res->line) {
+        char by[24];
+        wsprintfA(by, " by line %d", res->line);
+        lstrcatA(what, by);
+    }
+    wsprintfA(m, "site %lu debug: %s %s (Host %s) -> ", (unsigned long)id, method, rq->url, host);
+    cat(m, what, sizeof m);
+    cat(m, ", rules took ", sizeof m);
+    cat(m, took, sizeof m);
+    log_line(m);
+}
+
 static DWORD preproc(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr)
 {
     char url[URL_CAP], idbuf[16], home[MAX_PATH];
@@ -477,6 +511,8 @@ static DWORD preproc(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr)
     um_result res;
     const char *p;
     DWORD ret = SF_STATUS_REQ_NEXT_NOTIFICATION;
+    BOOL debug;
+    LARGE_INTEGER t0, t1, freq;
 
     if (!hdr->GetHeader(pfc, "url", url, &n)) return ret;
     if (is_rules_file(url)) return respond(pfc, "403 Forbidden", NULL);
@@ -486,8 +522,15 @@ static DWORD preproc(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr)
     for (p = idbuf; *p >= '0' && *p <= '9'; p++) id = id * 10 + (DWORD)(*p - '0');
     if (!id) return ret;
 
-    rr = site_rules(id, home, sizeof home);
-    if (!rr) return ret;
+    rr = site_rules(id, home, sizeof home, &debug);
+    if (!rr) {
+        if (debug) {
+            char m[URL_CAP + 80];
+            wsprintfA(m, "site %lu debug: %s -> no rules loaded (see the lines above)", (unsigned long)id, url);
+            log_line(m);
+        }
+        return ret;
+    }
 
     rq.pfc = pfc;
     rq.hdr = hdr;
@@ -497,7 +540,14 @@ static DWORD preproc(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr)
     env.var = env_var;
     env.file_type = env_file_type;
 
-    switch (um_apply(rr->r, url, &env, &res)) {
+    if (debug) QueryPerformanceCounter(&t0);
+    um_apply(rr->r, url, &env, &res);
+    if (debug) {
+        QueryPerformanceCounter(&t1);
+        debug_line(&rq, id, &res, t1.QuadPart - t0.QuadPart,
+                   QueryPerformanceFrequency(&freq) ? freq.QuadPart : 0);
+    }
+    switch (res.action) {
     case UM_REWRITE:
         if (!hdr->SetHeader(pfc, "url", res.url)) log_line("couldn't set the rewritten URL");
         break;

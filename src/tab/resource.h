@@ -12,3 +12,4 @@
 #define IDC_BROWSE      109
 #define IDC_FMT_GROUP   110
 #define IDC_SRC_GROUP   111
+#define IDC_DEBUG       112

@@ -50,5 +50,7 @@ BEGIN
     EDITTEXT        IDC_FILE, 24, 137, 158, 13, ES_AUTOHSCROLL | WS_GROUP | WS_TABSTOP
     PUSHBUTTON      "&Browse...", IDC_BROWSE, 188, 136, 50, 14
 
-    LTEXT           "Use ""In this file"" for a site whose home directory is a network share: IIS can't read rules from there.\n\nChanges take effect on the next request; IIS doesn't need to be restarted.", -1, 7, 170, 238, 40
+    AUTOCHECKBOX    "&Debug: log every request and how long the rules took", IDC_DEBUG, 7, 168, 238, 10
+
+    LTEXT           "Use ""In this file"" for a site whose home directory is a network share: IIS can't read rules from there. Changes take effect on the next request; no IIS restart needed. The log is urlmagic4.log in the urlmagic folder.", -1, 7, 184, 238, 30
 END
