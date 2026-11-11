@@ -514,7 +514,7 @@ BOOL WINAPI GetFilterVersion(HTTP_FILTER_VERSION *ver)
     return TRUE;
 }
 
-/* "site 3 debug: GET /old (Host dev.example.com) -> redirect 301 / by line 3, 42 us" */
+/* "site 3 debug: GET /old (Host dev.example.com) -> redirect 301 / by line 3, 42 µs" */
 static void debug_line(request *rq, DWORD id, const um_result *res, LONGLONG ticks, LONGLONG freq)
 {
     char m[URL_CAP * 2 + 200], method[16], host[128], what[URL_CAP + 40], took[40];
@@ -532,7 +532,8 @@ static void debug_line(request *rq, DWORD id, const um_result *res, LONGLONG tic
     case UM_FAIL:      lstrcpyA(what, "500 (rules failed: regex too complex?)"); break;
     default:           lstrcpyA(what, "unchanged"); break;
     }
-    if (us < 10000) wsprintfA(took, "%lu us", (unsigned long)us);           /* microseconds */
+    /* \xB5 = the micro sign in Windows-1252, which the log (and Notepad) use */
+    if (us < 10000) wsprintfA(took, "%lu \xB5s", (unsigned long)us);
     else wsprintfA(took, "%lu.%03lu ms", (unsigned long)(us / 1000), (unsigned long)(us % 1000));
     if (res->line) {
         char by[24];
