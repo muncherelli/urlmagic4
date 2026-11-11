@@ -5,9 +5,10 @@ CC      = i686-w64-mingw32-gcc
 WINDRES = i686-w64-mingw32-windres
 DEST   ?= $(HOME)/Development/files
 
-CFLAGS  = -Os -Wall -Wextra -std=c99 -ffreestanding -fno-builtin -fno-stack-protector \
+CFLAGS  = -Os -march=i486 -mtune=pentium -Wall -Wextra -std=c99 -ffreestanding -fno-builtin -fno-stack-protector \
           -fno-asynchronous-unwind-tables -fno-ident -mno-stack-arg-probe -DUNICODE -D_UNICODE \
           -D_WIN32_WINNT=0x0400 -D_WIN32_IE=0x0300 -DWINVER=0x0400
+# -march=i486: NT 4.0 runs on 486/Pentium CPUs, which lack P6 instructions like CMOV
 # NT 4.0 loader: no CRT, kernel32/user32/advapi32/ole32/comctl32 only, NT 4.0 versions
 LDFLAGS = -shared -nostdlib -s -Wl,-e,_DllMain@12 -Wl,--enable-stdcall-fixup \
           -Wl,--major-os-version,4,--minor-os-version,0 \

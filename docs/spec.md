@@ -156,5 +156,7 @@ Unknown flags: logged, line skipped.
 
 * Portable C core (parser, matcher, substitution) with tests that run on Linux.
 * Thin ISAPI layer, cross-compiled with MinGW-w64 (i686), no CRT, NT 4.0 subsystem version.
+* Compile with `-march=i486`: NT 4.0 boxes (and emulators of them) often have pre-P6 CPUs
+  without `CMOV`; MinGW's default (`pentiumpro`) crashes there with 0xC000001E.
 * PCRE2 (BSD licence) compiled into the DLL.
 * GitHub Actions builds the DLL on every push and attaches it to releases.
