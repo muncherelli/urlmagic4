@@ -1,0 +1,27 @@
+#include <windows.h>
+#include "resource.h"
+
+IDI_TAB ICON "../../res/urlmagic4.ico"
+
+/* 252 x 218 dialog units: the size of IIS 4's own property pages */
+IDD_SITE DIALOG 0, 0, 252, 218
+STYLE WS_CHILD | WS_DISABLED | WS_CAPTION
+CAPTION "URL Magic 4"
+FONT 8, "MS Sans Serif"
+BEGIN
+    LTEXT           "", IDC_SITE, 7, 7, 238, 10
+    AUTOCHECKBOX    "&Enable URL rewriting for this site", IDC_ENABLED, 7, 22, 238, 10
+
+    GROUPBOX        "Rules format", IDC_FMT_GROUP, 7, 38, 238, 52
+    AUTORADIOBUTTON "A&utomatic (by file name)", IDC_FMT_AUTO, 14, 50, 224, 10, WS_GROUP | WS_TABSTOP
+    AUTORADIOBUTTON "&Apache mod_rewrite (.htaccess)", IDC_FMT_HTACCESS, 14, 62, 224, 10
+    AUTORADIOBUTTON "&ISAPI_Rewrite 2 (httpd.ini)", IDC_FMT_HTTPDINI, 14, 74, 224, 10
+
+    GROUPBOX        "Rules file", IDC_SRC_GROUP, 7, 96, 238, 66
+    AUTORADIOBUTTON "In the site's &home directory", IDC_SRC_DOCROOT, 14, 108, 224, 10, WS_GROUP | WS_TABSTOP
+    AUTORADIOBUTTON "In this &file:", IDC_SRC_FILE, 14, 122, 224, 10
+    EDITTEXT        IDC_FILE, 24, 137, 158, 13, ES_AUTOHSCROLL | WS_GROUP | WS_TABSTOP
+    PUSHBUTTON      "&Browse...", IDC_BROWSE, 188, 136, 50, 14
+
+    LTEXT           "Use ""In this file"" for a site whose home directory is a network share: IIS can't read rules from there.\n\nChanges take effect on the next request; IIS doesn't need to be restarted.", -1, 7, 170, 238, 40
+END

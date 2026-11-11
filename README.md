@@ -28,6 +28,26 @@ See [docs/spec.md](docs/spec.md) for what's supported, and
 urlmagic4 is an independent project, not affiliated with Helicon Tech; ISAPI_Rewrite is
 their trademark.
 
+## Install (IIS manager tab)
+
+The **URL Magic 4** tab in Internet Service Manager sets, per web site, whether rewriting is on,
+which rule format to use, and where the rules file is.
+
+1. Copy `urlmagic4tab.dll` to a folder on the server's local disk, e.g. `C:\urlmagic4\`.
+2. Register it: `regsvr32 C:\urlmagic4\urlmagic4tab.dll`
+3. Open **Internet Service Manager** and enable it once: **Console → Add/Remove Snap-in →
+   Extensions**, choose *Internet Information Server*, tick **URL Magic 4**, OK. Then
+   **Console → Save** so it stays enabled.
+4. Right-click a web site → **Properties** → **URL Magic 4**.
+
+Settings are stored in `HKLM\SOFTWARE\urlmagic4\Sites\W3SVC\<site number>`.
+To remove the tab: `regsvr32 /u C:\urlmagic4\urlmagic4tab.dll` (site settings are kept).
+
+## Building
+
+On Linux with the MinGW-w64 i686 cross-compiler (`gcc-mingw-w64-i686` on Debian,
+`mingw-w64-gcc` on Arch): `make`. The DLLs land in `build/`.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
