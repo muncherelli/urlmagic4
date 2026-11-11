@@ -105,6 +105,17 @@ $(B)/settings.o: src/common/settings.c src/common/settings.h | $(B)
 $(B)/nocrt.o: src/common/nocrt.c | $(B)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+# urlmagic-bench.exe: times the engine on the machine it runs on (see tests/bench.c)
+bench: $(B)/urlmagic-bench.exe
+$(B)/urlmagic-bench.exe: $(B)/bench.o $(B)/rewrite.o $(B)/nocrt.o $(PCRE2_OBJS)
+	$(CC) -nostdlib -s -Wl,-e,_start@0 -Wl,--subsystem,console:4.0 \
+	  -Wl,--major-os-version,4,--minor-os-version,0 \
+	  -Wl,--disable-dynamicbase,--disable-nxcompat -o $@ $^ -lkernel32 -luser32 -lgcc
+	@if i686-w64-mingw32-objdump -d $@ | grep -qE '\bcmov|\bf(u)?comi'; then \
+	  echo "error: $@ uses P6-only instructions"; rm -f $@; exit 1; fi
+$(B)/bench.o: tests/bench.c src/engine/rewrite.h | $(B)
+	$(CC) $(FAST_CFLAGS) -c -o $@ $<
+
 dist: all $(DOCS)
 	rm -rf $(B)/dist $(B)/urlmagic[0-9]*.zip
 	mkdir -p $(B)/dist
@@ -135,4 +146,4 @@ install: all
 clean:
 	rm -rf $(B)
 
-.PHONY: all dist test install clean
+.PHONY: all dist test install clean bench
