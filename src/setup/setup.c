@@ -93,7 +93,7 @@ static void ui_init(void)
     DWORD mode;
     g_color = GetConsoleMode(g_out, &mode) && GetConsoleScreenBufferInfo(g_out, &ci);
     if (g_color) g_attr0 = ci.wAttributes;
-    SetConsoleTitleA("URL Magic " UM_VERSION_STR " Install/Uninstall");
+    SetConsoleTitleA("URL Magic v" UM_VERSION_STR " Setup");
     {
         /* the console window's own icon: undocumented, so only if kernel32 has it */
         typedef BOOL (WINAPI *seticon_fn)(HICON);
