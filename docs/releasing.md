@@ -1,26 +1,36 @@
 # Releasing
 
-urlmagic4 uses [semantic versioning](https://semver.org) (starting at 4.0.0, for IIS 4) and
-[Changesets](https://github.com/changesets/changesets) for the changelog.
+urlmagic4 uses [semantic versioning](https://semver.org), starting at 4.0.0 (for IIS 4), and
+[release-please](https://github.com/googleapis/release-please) to cut releases from
+[Conventional Commits](https://www.conventionalcommits.org).
 
-## Day to day
+## How versions are chosen
 
-* Every pull request that changes behaviour adds a changeset in `.changeset/` (see the README
-  there): `patch` for fixes, `minor` for features, `major` for breaking changes.
-* On every push to `trunk`, the **Release** workflow opens or updates a **Version Packages** pull
-  request. It bumps `package.json`, writes `CHANGELOG.md` and deletes the used changesets.
+Commit messages on `trunk` decide the next version:
+
+| Commit | Next version |
+|---|---|
+| `fix: ...` | patch (4.0.0 → 4.0.1) |
+| `feat: ...` | minor (4.0.0 → 4.1.0) |
+| `feat!: ...` or a `BREAKING CHANGE:` footer | major (4.0.0 → 5.0.0) |
+| `docs:`, `chore:`, `build:`, `ci:`, `test:`, `refactor:`, `style:` | no release on their own |
 
 ## Cutting a release
 
-1. Merge the Version Packages pull request (if there is one).
-2. GitHub → Actions → **Release** → *Run workflow* on `trunk`.
+1. On every push to `trunk`, the **Release** workflow opens or updates a release pull request
+   ("chore(trunk): release 4.1.0"). It bumps `version.txt` and adds the new section to
+   `CHANGELOG.md`.
+2. Merge it when you want to release. The workflow tags `v<version>`, creates the GitHub
+   release, builds `urlmagic4-<version>.zip` and attaches it.
 
-The workflow builds the DLLs and creates the GitHub release `v<version>` with
-`urlmagic4-<version>.zip` attached and that version's changelog section as the notes. If the
-tag already exists, nothing is published.
+The version in `version.txt` is stamped into the DLLs and `setup.exe` by the Makefile.
 
-## Before 4.0.0
+## First release
 
-`package.json` already says 4.0.0 and nothing has been released. Don't add changesets until
-4.0.0 is out (they would bump it to 4.0.1 or 4.1.0); edit the 4.0.0 section of
-`CHANGELOG.md` directly instead.
+`release-please-config.json` says `"release-as": "4.0.0"` so the first release is 4.0.0.
+Remove that line after 4.0.0 is out; from then on the commits decide.
+
+## One-time repository setting
+
+GitHub → Settings → Actions → General → **Allow GitHub Actions to create and approve pull
+requests** must be on, or the release pull request can't be opened.

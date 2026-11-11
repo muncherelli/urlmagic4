@@ -69,7 +69,8 @@ On Linux with the MinGW-w64 i686 cross-compiler (`gcc-mingw-w64-i686` on Debian,
 * `make test` runs the rewrite engine's tests natively (needs `gcc`)
 * `make dist` makes the release zip
 
-Releases use [semver](https://semver.org) and Changesets: see [docs/releasing.md](docs/releasing.md).
+Releases use [semver](https://semver.org) and release-please (from Conventional Commits): see
+[docs/releasing.md](docs/releasing.md).
 Regular expressions are [PCRE2](https://github.com/PCRE2Project/pcre2) (BSD licence), bundled
 in `third_party/pcre2`.
 

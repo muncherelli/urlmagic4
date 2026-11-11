@@ -4,7 +4,7 @@
 #   make dist       build/urlmagic4-<version>.zip (DLLs + README + LICENSE + CHANGELOG)
 #   make install    copy the DLLs to $(DEST) (default ~/Development/files)
 comma := ,
-VERSION := $(shell sed -n 's/^  "version": *"\([^"]*\)".*/\1/p' package.json)
+VERSION := $(strip $(shell cat version.txt))
 VERSION_NUM := $(subst .,$(comma),$(firstword $(subst -, ,$(VERSION))))$(comma)0
 CC      = i686-w64-mingw32-gcc
 WINDRES = i686-w64-mingw32-windres
@@ -41,8 +41,8 @@ all: $(B)/urlmagic4.dll $(B)/urlmagic4tab.dll $(B)/setup.exe
 $(B):
 	mkdir -p $@
 
-# version stamped into the DLLs' VERSIONINFO (from package.json, bumped by Changesets)
-$(B)/version.h: package.json | $(B)
+# version stamped into the DLLs' VERSIONINFO (version.txt, bumped by release-please)
+$(B)/version.h: version.txt | $(B)
 	printf '#define UM_VERSION_STR "%s"\n#define UM_VERSION_WSTR L"%s"\n#define UM_VERSION_NUM %s\n' '$(VERSION)' '$(VERSION)' '$(VERSION_NUM)' > $@
 
 $(B)/urlmagic4tab.dll: $(TAB_OBJS) src/tab/tab.def
