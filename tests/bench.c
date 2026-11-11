@@ -83,5 +83,20 @@ void WINAPI start(void)
              "RewriteEngine On\nRewriteRule ^magic$ index.cfm [L]\nRewriteRule ^old$ / [R=301,L]\n", "/old");
     scenario("host condition + capture",
              "RewriteEngine On\nRewriteCond %{HTTP_HOST} ^(dev)\\.\nRewriteRule ^(.*)$ /%1/$1 [L]\n", "/x/y");
+    {
+        /* run from Explorer the window would close at once: wait for a key (not when the
+           output goes to a file) */
+        DWORD mode, got;
+        HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
+        INPUT_RECORD ir;
+        if (GetConsoleMode(out, &mode)) {
+            say("\r\nPress any key to exit.");
+            SetConsoleMode(in, 0);
+            FlushConsoleInputBuffer(in);
+            while (ReadConsoleInputA(in, &ir, 1, &got) &&
+                   !(ir.EventType == KEY_EVENT && ir.Event.KeyEvent.bKeyDown)) {}
+            say("\r\n");
+        }
+    }
     ExitProcess(0);
 }
