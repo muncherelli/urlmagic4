@@ -118,9 +118,9 @@ static const char *LOGO_FONT[][5] = {
     {"X..X.", "X..X.", "XXXXX", "...X.", "...X."},   /* 4 */
 };
 /* glyph index, or -1 for a word gap */
-static const int LOGO_TEXT[] = { 0, 1, 2, -1, 3, 4, 5, 6, 7, -1, 8 };
-#define LOGO_W 53
-#define BOX_W 75                         /* inside width: 2 + icon 16 + 2 + logo 53 + 2 */
+static const int LOGO_TEXT[] = { 0, 1, 2, -1, 3, 4, 5, 6, 7 };   /* URL MAGIC; the 4 is in the icon */
+#define LOGO_W 46
+#define BOX_W 68                         /* inside width: 2 + icon 16 + 2 + logo 46 + 2 */
 
 /* the wand icon (same pixel art as res/urlmagic4.ico, tools/make_art.py), drawn with half
    blocks: each character cell shows two pixels, one above the other */
@@ -225,7 +225,7 @@ static void banner(void)
         out("\xBA\r\n");
     }
     box_line("", C_GREY);
-    box_line("URL rewriting for IIS 4.0 on Windows NT 4.0", C_WHITE);
+    box_line("The missing IIS tab: URL rewriting for IIS 4.0 on NT 4.0", C_WHITE);
     box_line("version " UM_VERSION_STR "  \xFA  github.com/muncherelli/urlmagic4", C_DIM);
     box_edge((char)0xC8, (char)0xBC);
     color(C_GREY);

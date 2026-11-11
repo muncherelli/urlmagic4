@@ -1,8 +1,9 @@
-<p align="center"><img src="docs/logo.png" alt="The URL Magic tab in IIS 4.0's web site Properties" width="570"></p>
+<p align="center"><img src="docs/logo.png" alt="The URL Magic tab" width="332"></p>
 
 # urlmagic4
 
-URL rewriting for **IIS 4.0 on Windows NT 4.0**, as an ISAPI filter.
+**The missing IIS tab.** URL rewriting for **IIS 4.0 on Windows NT 4.0**, as an ISAPI filter,
+with its own tab in Internet Service Manager.
 
 Pretty URLs, 301 redirects and conditional rewrites for sites still served by IIS 4,
 configured with Apache mod_rewrite rules in a `.htaccess` file:

@@ -2,7 +2,7 @@
 """Draw urlmagic4's artwork from the pixel art below (no image libraries needed):
 
   res/urlmagic4.ico   16x16 + 32x32, 16 colours (what NT 4.0 can show)
-  docs/logo.png       README picture: the URL Magic tab as IIS 4's Properties dialog shows it
+  docs/logo.png       README picture: the URL Magic tab, as IIS 4's Properties dialog draws it
 
 Run from the repo root:  python3 tools/make_art.py
 """
@@ -144,83 +144,35 @@ def draw_text(px, x, y, text, colour):
 
 
 def banner():
-    """The URL Magic tab as IIS 4's site Properties dialog shows it, at 1:1 pixels, then
-    scaled up. Neighbouring tabs for context; the page shows the tab's first control."""
+    """Just the URL Magic tab, as IIS 4's Properties dialog draws a selected tab, at 1:1
+    pixels, then scaled up."""
     grey, white, shadow, black = PALETTE[7], PALETTE[15], PALETTE[8], PALETTE[0]
-    tabs = ["HTTP Headers", "Custom Errors", "URL Magic"]      # the last one is selected
-    label = "Enable URL rewriting for this site"
-
-    widths = [text_width(t) + 12 for t in tabs]
-    widths[-1] += 16 + 3                                         # icon + gap
-    page_top = 22
-    w = max(4 + sum(widths) + 40, 4 + 12 + 13 + 4 + text_width(label) + 16)
-    h = page_top + 32
+    label = "URL Magic"
+    tab_w = 6 + 16 + 3 + text_width(label) + 6
+    margin = 4
+    w, h = margin + tab_w + margin, 3 + 21 + 3
     px = [[grey] * w for _ in range(h)]
+    x0, x1, top, base = margin, margin + tab_w - 1, 3, 3 + 20
 
-    def hline(y, x0, x1, c):
-        for x in range(x0, x1 + 1):
-            px[y][x] = c
+    for x in range(x0 + 2, x1 - 1):
+        px[top][x] = white                                       # top edge
+    px[top + 1][x0 + 1] = white                                  # rounded corners
+    px[top + 1][x1 - 1] = black
+    for y in range(top + 2, base + 1):
+        px[y][x0] = white                                        # left edge
+        px[y][x1] = black                                        # right edge
+        px[y][x1 - 1] = shadow
+    px[top + 1][x1 - 2] = shadow
+    for x in list(range(0, x0 + 1)) + list(range(x1, w)):       # the page's top edge
+        px[base][x] = white
 
-    def vline(x, y0, y1, c):
-        for y in range(y0, y1 + 1):
-            px[y][x] = c
+    for iy, row in enumerate(ICON):
+        for ix, ch in enumerate(row):
+            if ch != ".":
+                px[top + 3 + iy][x0 + 6 + ix] = PALETTE[KEY[ch]]
+    draw_text(px, x0 + 6 + 16 + 3, top + 8, label, black)
 
-    # the page: raised panel
-    left, right, bottom = 2, w - 3, h - 3
-    hline(page_top, left, right, white)
-    vline(left, page_top, bottom, white)
-    hline(bottom, left, right, black)
-    hline(bottom - 1, left + 1, right - 1, shadow)
-    vline(right, page_top, bottom, black)
-    vline(right - 1, page_top + 1, bottom - 1, shadow)
-
-    # the tabs
-    x = left
-    for i, (t, tw) in enumerate(zip(tabs, widths)):
-        selected = i == len(tabs) - 1
-        x0, x1 = (x - 2, x + tw + 1) if selected else (x, x + tw - 1)
-        top = page_top - 19 if selected else page_top - 17
-        if selected:
-            hline(page_top, x0 + 1, x1 - 1, grey)               # the tab joins the page
-            for y in range(top + 1, page_top + 1):
-                hline(y, x0 + 1, x1 - 2, grey)
-        hline(top, x0 + 2, x1 - 2, white)
-        px[top + 1][x0 + 1] = white
-        vline(x0, top + 2, page_top - (0 if selected else 1), white)
-        px[top + 1][x1 - 1] = black
-        vline(x1, top + 2, page_top - (0 if selected else 1), black)
-        vline(x1 - 1, top + 1, page_top - (0 if selected else 1), shadow)
-        tx = x0 + 6 + (2 if selected else 0)
-        ty = top + 5
-        if selected:
-            for iy, row in enumerate(ICON):
-                for ix, ch in enumerate(row):
-                    if ch != ".":
-                        px[top + 2 + iy][tx + ix] = PALETTE[KEY[ch]]
-            tx += 16 + 3
-            ty = top + 7
-        draw_text(px, tx, ty, t, black)
-        x += tw
-
-    # first control on the page: a ticked checkbox
-    cx, cy = left + 10, page_top + 10
-    hline(cy, cx, cx + 12, shadow)
-    vline(cx, cy, cy + 12, shadow)
-    hline(cy + 1, cx + 1, cx + 11, black)
-    vline(cx + 1, cy + 1, cy + 11, black)
-    hline(cy + 12, cx, cx + 12, white)
-    vline(cx + 12, cy, cy + 12, white)
-    hline(cy + 11, cx + 1, cx + 11, grey)
-    vline(cx + 11, cy + 1, cy + 11, grey)
-    for y in range(cy + 2, cy + 11):
-        hline(y, cx + 2, cx + 10, white)
-    for gy, row in enumerate(CHECK):
-        for gx, bit in enumerate(row):
-            if bit == "X":
-                px[cy + 3 + gy][cx + 3 + gx] = black
-    draw_text(px, cx + 13 + 4, cy + 3, label, black)
-
-    f = 3                                                       # final pixel size
+    f = 4                                                       # final pixel size
     return [[p for p in row for _ in range(f)] for row in px for _ in range(f)]
 
 
