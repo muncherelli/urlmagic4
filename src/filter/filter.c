@@ -39,6 +39,7 @@ static const GUID IID_UmIMSAdminBase =
 #define RULES_EVERY     2000        /* ms between rules-file checks */
 #define MAX_RULES_FILE  (1024 * 1024)
 #define URL_CAP         4096
+#define URL_MAX         65536       /* longer URLs get 414 */
 #define LOG_MAX         (1024 * 1024)
 
 static HINSTANCE g_hinst;
@@ -69,6 +70,13 @@ static void cat(char *d, const char *s, size_t cap)
     if (n < cap) cpy(d + n, s, cap - n);
 }
 
+/* WideCharToMultiByte, but always NUL-terminated ("" if it doesn't fit) */
+static void to_ansi(const WCHAR *w, char *out, int cap)
+{
+    if (!WideCharToMultiByte(CP_ACP, 0, w, -1, out, cap, NULL, NULL)) out[0] = 0;
+    out[cap - 1] = 0;
+}
+
 static DWORD tick_since(DWORD then) { return GetTickCount() - then; }
 
 /* ---------------------------------------------------------------- log file */
@@ -84,6 +92,11 @@ static void log_line(const char *msg)
     wsprintfA(line, "%04u-%02u-%02u %02u:%02u:%02u ", t.wYear, t.wMonth, t.wDay,
               t.wHour, t.wMinute, t.wSecond);
     cat(line, msg, sizeof line - 3);
+    {
+        /* one entry, one line: control characters from a request can't fake entries */
+        char *p;
+        for (p = line; *p; p++) if ((unsigned char)*p < 0x20 || *p == 0x7f) *p = '?';
+    }
     cat(line, "\r\n", sizeof line);
 
     EnterCriticalSection(&g_loglock);
@@ -193,7 +206,7 @@ static void read_home(site *s)
             n = lstrlenW(buf);
             while (n > 3 && buf[n - 1] == L'\\') buf[--n] = 0;     /* keep "C:\" */
             lstrcpynW(s->home, buf, MAX_PATH);
-            WideCharToMultiByte(CP_ACP, 0, s->home, -1, s->home_a, MAX_PATH, NULL, NULL);
+            to_ansi(s->home, s->home_a, MAX_PATH);
             n = (int)strlen(s->home_a);
             if (n && s->home_a[n - 1] == '\\') s->home_a[n - 1] = 0;
         }
@@ -241,7 +254,7 @@ static void refresh_rules(site *s, const WCHAR *path)
 
     if (same) return;
 
-    WideCharToMultiByte(CP_ACP, 0, path, -1, pc.file, MAX_PATH, NULL, NULL);
+    to_ansi(path, pc.file, MAX_PATH);
     if (present && wants_httpdini(s, path)) {
         char m[MAX_PATH + 80];
         wsprintfA(m, "%s: httpd.ini (ISAPI_Rewrite 2) rules aren't supported yet; ignored", pc.file);
@@ -556,35 +569,6 @@ static const char *redirect_status(int code)
     }
 }
 
-/* the last path segment of url names a rules file? (decoded, any case) */
-static BOOL is_rules_file(const char *url)
-{
-    static const char *names[] = { ".htaccess", "httpd.htaccess", "httpd.ini", "httpd.parse.errors",
-                                   "nginx.conf", "urlmagic4.conf", NULL };
-    char seg[64];
-    const char *s = url, *last = url;
-    size_t j = 0;
-    int i;
-
-    for (; *s && *s != '?'; s++) if (*s == '/' || *s == '\\') last = s + 1;
-    for (s = last; *s && *s != '?' && j + 1 < sizeof seg; s++) {
-        char c = *s;
-        if (c == '%' && s[1] && s[2]) {
-            int h = lower((unsigned char)s[1]), l = lower((unsigned char)s[2]);
-            h = (h >= 'a') ? h - 'a' + 10 : h - '0';
-            l = (l >= 'a') ? l - 'a' + 10 : l - '0';
-            c = (char)(h * 16 + l);
-            s += 2;
-        }
-        seg[j++] = (char)lower((unsigned char)c);
-    }
-    seg[j] = 0;
-    /* NTFS ignores trailing dots and spaces */
-    while (j && (seg[j - 1] == '.' || seg[j - 1] == ' ')) seg[--j] = 0;
-    for (i = 0; names[i]; i++) if (ieq(seg, names[i])) return TRUE;
-    return FALSE;
-}
-
 /* ---------------------------------------------------------------- ISAPI exports */
 
 /* Count the sites that are on (and see whether any logs debug lines); with log, also write one
@@ -617,9 +601,9 @@ static int scan_sites(BOOL log, BOOL *any_debug)
                 if (cfg.debug) *any_debug = TRUE;
             }
             if (!log) continue;
-            WideCharToMultiByte(CP_ACP, 0, service, -1, sv, sizeof sv, NULL, NULL);
+            to_ansi(service, sv, sizeof sv);
             if (cfg.source == UM_SRC_FILE)
-                WideCharToMultiByte(CP_ACP, 0, cfg.rules_file, -1, file, MAX_PATH, NULL, NULL);
+                to_ansi(cfg.rules_file, file, MAX_PATH);
             else
                 lstrcpyA(file, "the site's home directory");
             wsprintfA(m, "site %s/%lu: rewriting %s, format %s, rules from %s%s", sv, (unsigned long)id,
@@ -703,10 +687,18 @@ static void debug_line(request *rq, DWORD id, const um_result *res, LONGLONG rul
     log_line(m);
 }
 
-static DWORD preproc(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr)
+/* no control characters (they'd end up in a header line) */
+static BOOL header_safe(const char *s)
 {
-    char url[URL_CAP], idbuf[16];
-    DWORD n = sizeof url, id = 0;
+    for (; *s; s++) if ((unsigned char)*s < 0x20 || *s == 0x7f) return FALSE;
+    return TRUE;
+}
+
+static DWORD preproc(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr, const char *url,
+                     LARGE_INTEGER ts)
+{
+    char idbuf[16];
+    DWORD n, id = 0;
     snap *sn;
     um_scratch *sc;
     request rq;
@@ -714,12 +706,9 @@ static DWORD preproc(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr)
     um_result res;
     const char *p;
     DWORD ret = SF_STATUS_REQ_NEXT_NOTIFICATION;
-    LARGE_INTEGER ts, t0, t1;
+    LARGE_INTEGER t0, t1;
 
-    ts.QuadPart = 0;
-    if (g_any_debug) QueryPerformanceCounter(&ts);
-    if (!hdr->GetHeader(pfc, "url", url, &n)) return ret;
-    if (is_rules_file(url)) return respond(pfc, hdr, "403 Forbidden", NULL);
+    if (um_is_rules_file(url)) return respond(pfc, hdr, "403 Forbidden", NULL);
     if (!g_any_on) return ret;                  /* URL Magic is off everywhere */
 
     n = sizeof idbuf;
@@ -760,9 +749,16 @@ static DWORD preproc(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr)
     }
     switch (res.action) {
     case UM_REWRITE:
-        if (!hdr->SetHeader(pfc, "url", res.url)) log_line("couldn't set the rewritten URL");
+        /* a rule mustn't hand out a rules file either */
+        if (um_is_rules_file(res.url) || !header_safe(res.url))
+            ret = respond(pfc, hdr, "403 Forbidden", NULL);
+        else if (!hdr->SetHeader(pfc, "url", res.url))
+            log_line("couldn't set the rewritten URL");
         break;
-    case UM_REDIRECT:  ret = respond(pfc, hdr, redirect_status(res.status), res.url); break;
+    case UM_REDIRECT:
+        ret = header_safe(res.url) ? respond(pfc, hdr, redirect_status(res.status), res.url)
+                                   : respond(pfc, hdr, "500 Internal Server Error", NULL);
+        break;
     case UM_FORBIDDEN: ret = respond(pfc, hdr, "403 Forbidden", NULL); break;
     case UM_GONE:      ret = respond(pfc, hdr, "410 Gone", NULL); break;
     case UM_FAIL: {
@@ -781,11 +777,42 @@ static DWORD preproc(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr)
     return ret;
 }
 
+/* a URL too long for URL_CAP, in a heap block (HeapFree it); NULL if over URL_MAX */
+static char *long_url(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr)
+{
+    DWORD cap;
+    for (cap = URL_CAP * 2; cap <= URL_MAX; cap *= 2) {
+        DWORD n = cap;
+        char *u = HeapAlloc(GetProcessHeap(), 0, cap);
+        BOOL more;
+        if (!u) return NULL;
+        if (hdr->GetHeader(pfc, "url", u, &n)) { u[cap - 1] = 0; return u; }
+        more = GetLastError() == ERROR_INSUFFICIENT_BUFFER;
+        HeapFree(GetProcessHeap(), 0, u);
+        if (!more) return NULL;
+    }
+    return NULL;
+}
+
 DWORD WINAPI HttpFilterProc(HTTP_FILTER_CONTEXT *pfc, DWORD type, LPVOID data)
 {
-    if (type == SF_NOTIFY_PREPROC_HEADERS)
-        return preproc(pfc, (HTTP_FILTER_PREPROC_HEADERS *)data);
-    return SF_STATUS_REQ_NEXT_NOTIFICATION;
+    HTTP_FILTER_PREPROC_HEADERS *hdr = data;
+    char buf[URL_CAP], *url = buf;
+    DWORD n = sizeof buf, ret;
+    LARGE_INTEGER ts;
+
+    if (type != SF_NOTIFY_PREPROC_HEADERS) return SF_STATUS_REQ_NEXT_NOTIFICATION;
+    ts.QuadPart = 0;
+    if (g_any_debug) QueryPerformanceCounter(&ts);
+    if (!hdr->GetHeader(pfc, "url", buf, &n)) {
+        /* a long URL (a long query string) is checked all the same: otherwise
+           "/httpd.htaccess?" and 5000 more characters would fetch the rules file */
+        if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) return SF_STATUS_REQ_NEXT_NOTIFICATION;
+        if (!(url = long_url(pfc, hdr))) return respond(pfc, hdr, "414 Request-URI Too Long", NULL);
+    }
+    ret = preproc(pfc, hdr, url, ts);
+    if (url != buf) HeapFree(GetProcessHeap(), 0, url);
+    return ret;
 }
 
 BOOL WINAPI TerminateFilter(DWORD flags)
