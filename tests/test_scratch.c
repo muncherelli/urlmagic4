@@ -11,7 +11,8 @@ int main(void)
     um_scratch *sc = um_scratch_new();
     um_env env = { NULL, NULL, NULL };
     um_result res;
-    size_t heavy, after;
+    size_t heavy;
+    size_t after;
     int failures = 0;
 
     url[0] = '/';

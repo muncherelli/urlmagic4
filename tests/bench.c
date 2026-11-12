@@ -22,13 +22,12 @@ static void say(const char *s)
 /* like the filter's: a few names, compared without locale-aware calls */
 static const char *var(void *ctx, const char *name, const char *path, char *buf, size_t cap)
 {
-    size_t i;
     (void)ctx;
     if (name[0] == 'H' && name[5] == 'H') return "dev.muncherelli.com";             /* HTTP_HOST */
     if (name[0] == 'R' && name[8] == 'F') {                                         /* REQUEST_FILENAME */
         lstrcpynA(buf, "C:", (int)cap);
         lstrcpynA(buf + 2, path, (int)cap - 2);
-        for (i = 0; buf[i]; i++) if (buf[i] == '/') buf[i] = '\\';
+        for (size_t i = 0; buf[i]; i++) if (buf[i] == '/') buf[i] = '\\';
         return buf;
     }
     return NULL;
@@ -42,32 +41,42 @@ static int file_type(void *ctx, const char *p)
     return (a & FILE_ATTRIBUTE_DIRECTORY) ? UM_FT_DIR : UM_FT_FILE;
 }
 
+static const char *action_name(int action)
+{
+    switch (action) {
+    case UM_NONE:     return "unchanged";
+    case UM_REWRITE:  return "rewrite";
+    case UM_REDIRECT: return "redirect";
+    default:          return "other";
+    }
+}
+
 static void scenario(const char *name, const char *rules, const char *url)
 {
     um_env env = { NULL, var, file_type };
     um_rules *r = um_parse(rules, (size_t)lstrlenA(rules), UM_DIALECT_APACHE, NULL, NULL);
     um_scratch *sc = um_scratch_new();
     um_result res;
-    LARGE_INTEGER f, t0, t1;
+    LARGE_INTEGER f;
+    LARGE_INTEGER t0;
+    LARGE_INTEGER t1;
     LONGLONG best = 0;
     DWORD ns;
-    int i, run;
     char line[300];
 
     if (!r || !sc) { say("out of memory\r\n"); return; }
-    for (i = 0; i < 100; i++) um_apply_s(r, url, &env, sc, &res);     /* warm up */
+    for (int i = 0; i < 100; i++) um_apply_s(r, url, &env, sc, &res);     /* warm up */
     QueryPerformanceFrequency(&f);
-    for (run = 0; run < RUNS; run++) {
+    for (int run = 0; run < RUNS; run++) {
         QueryPerformanceCounter(&t0);
-        for (i = 0; i < ROUNDS; i++) um_apply_s(r, url, &env, sc, &res);
+        for (int i = 0; i < ROUNDS; i++) um_apply_s(r, url, &env, sc, &res);
         QueryPerformanceCounter(&t1);
         if (!run || t1.QuadPart - t0.QuadPart < best) best = t1.QuadPart - t0.QuadPart;
     }
     /* nanoseconds per request */
     ns = (DWORD)(best * 1000000000 / f.QuadPart / ROUNDS);
     wsprintfA(line, "%-34s %5lu.%02lu us  (%s)\r\n", name, ns / 1000, (ns % 1000) / 10,
-              res.action == UM_NONE ? "unchanged" : res.action == UM_REWRITE ? "rewrite" :
-              res.action == UM_REDIRECT ? "redirect" : "other");
+              action_name(res.action));
     say(line);
     um_scratch_free(sc);
     um_rules_free(r);
@@ -85,15 +94,17 @@ void WINAPI start(void)
     say("urlmagic4 engine benchmark: microseconds per request, best of 5 x 4000\r\n\r\n");
     {
         /* what one clock reading costs (the filter's debug timings take three) */
-        LARGE_INTEGER f, t0, t1, x;
+        LARGE_INTEGER f;
+        LARGE_INTEGER t0;
+        LARGE_INTEGER t1;
+        LARGE_INTEGER x;
         LONGLONG best = 0;
         DWORD ns;
-        int i, run;
         char line[120];
         QueryPerformanceFrequency(&f);
-        for (run = 0; run < RUNS; run++) {
+        for (int run = 0; run < RUNS; run++) {
             QueryPerformanceCounter(&t0);
-            for (i = 0; i < ROUNDS; i++) QueryPerformanceCounter(&x);
+            for (int i = 0; i < ROUNDS; i++) QueryPerformanceCounter(&x);
             QueryPerformanceCounter(&t1);
             if (!run || t1.QuadPart - t0.QuadPart < best) best = t1.QuadPart - t0.QuadPart;
         }
@@ -123,7 +134,8 @@ void WINAPI start(void)
     {
         /* run from Explorer the window would close at once: wait for a key (not when the
            output goes to a file) */
-        DWORD mode, got;
+        DWORD mode;
+        DWORD got;
         HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
         INPUT_RECORD ir;
         if (GetConsoleMode(out, &mode)) {
@@ -131,7 +143,9 @@ void WINAPI start(void)
             SetConsoleMode(in, 0);
             FlushConsoleInputBuffer(in);
             while (ReadConsoleInputA(in, &ir, 1, &got) &&
-                   !(ir.EventType == KEY_EVENT && ir.Event.KeyEvent.bKeyDown)) {}
+                   !(ir.EventType == KEY_EVENT && ir.Event.KeyEvent.bKeyDown)) {
+                /* not a key press: keep waiting */
+            }
             say("\r\n");
         }
     }

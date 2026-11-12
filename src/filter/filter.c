@@ -43,7 +43,8 @@ static const GUID IID_UmIMSAdminBase =
 #define LOG_MAX         (1024 * 1024)
 
 static HINSTANCE g_hinst;
-static CRITICAL_SECTION g_lock, g_loglock;
+static CRITICAL_SECTION g_lock;
+static CRITICAL_SECTION g_loglock;
 static WCHAR g_logpath[MAX_PATH];
 
 /* ---------------------------------------------------------------- tiny helpers */
@@ -132,7 +133,8 @@ typedef struct {
 /* Everything a request needs from its site, replaced as a whole when anything changes. */
 typedef struct {
     LONG refs;
-    BOOL enabled, debug;
+    BOOL enabled;
+    BOOL debug;
     rules_ref *rules;               /* NULL = no rules */
     char home_a[MAX_PATH];          /* site home directory, ANSI, no trailing backslash */
 } snap;
@@ -157,10 +159,12 @@ typedef struct {
 } site;
 
 static site g_sites[MAX_SITES];
-static HANDLE g_thread, g_stop;
+static HANDLE g_thread;
+static HANDLE g_stop;
 /* from the registry, refreshed every few seconds: is any site on / logging debug lines?
    While no site is on, requests skip the site lookup altogether. */
-static volatile LONG g_any_on = 1, g_any_debug = 1;
+static volatile LONG g_any_on = 1;
+static volatile LONG g_any_debug = 1;
 static DWORD g_tls = TLS_OUT_OF_INDEXES;
 
 static void ref_release(rules_ref *rr)
@@ -184,7 +188,8 @@ static void read_home(site *s)
 {
     IMSAdminBaseW *mb = NULL;
     HRESULT init = CoInitializeEx(NULL, COINIT_MULTITHREADED);
-    WCHAR key[64], buf[MAX_PATH];
+    WCHAR key[64];
+    WCHAR buf[MAX_PATH];
     METADATA_RECORD rec;
     DWORD need = 0;
 
@@ -240,6 +245,59 @@ static BOOL wants_httpdini(const site *s, const WCHAR *path)
     return n >= 9 && lstrcmpiW(path + n - 9, L"httpd.ini") == 0;
 }
 
+/* The rules file's text in a heap block (HeapFree it), *len its length; NULL if it can't be
+   read or is too big. name: the file's name for the log. */
+static char *read_rules_file(const WCHAR *path, const char *name, DWORD *len)
+{
+    HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    DWORD size;
+    char *text = NULL;
+
+    *len = 0;
+    if (f == INVALID_HANDLE_VALUE) return NULL;
+    size = GetFileSize(f, NULL);
+    if (size > MAX_RULES_FILE) {
+        char m[MAX_PATH + 60];
+        wsprintfA(m, "%s: too big (over 1 MB), ignored", name);
+        log_line(m);
+    } else {
+        text = HeapAlloc(GetProcessHeap(), 0, size + 1);
+        if (text && !ReadFile(f, text, size, len, NULL)) {
+            HeapFree(GetProcessHeap(), 0, text);
+            text = NULL;
+        }
+    }
+    CloseHandle(f);
+    return text;
+}
+
+/* Parse the rules file into a new reference; NULL if it can't be read or has no rules. */
+static rules_ref *load_rules(const site *s, const WCHAR *path, parse_ctx *pc)
+{
+    DWORD got;
+    char *text = read_rules_file(path, pc->file, &got);
+    um_rules *r;
+    rules_ref *nr;
+    char m[MAX_PATH + 80];
+
+    if (!text) return NULL;
+    r = um_parse(text, got, UM_DIALECT_APACHE, parse_log, pc);
+    HeapFree(GetProcessHeap(), 0, text);
+    if (!r) return NULL;
+    nr = HeapAlloc(GetProcessHeap(), 0, sizeof *nr);
+    if (!nr) {
+        um_rules_free(r);
+        return NULL;
+    }
+    nr->r = r;
+    nr->refs = 1;
+    wsprintfA(m, "site %lu: loaded %d rule(s) from %s", (unsigned long)s->id,
+              um_rules_count(r), pc->file);
+    log_line(m);
+    return nr;
+}
+
 /* (Re)load the rules file if it changed. */
 static void refresh_rules(site *s, const WCHAR *path)
 {
@@ -255,47 +313,50 @@ static void refresh_rules(site *s, const WCHAR *path)
     if (same) return;
 
     to_ansi(path, pc.file, MAX_PATH);
-    if (present && wants_httpdini(s, path)) {
+    if (!present) {
+        if (s->present || lstrcmpiW(path, s->path) != 0) {
+            char m[MAX_PATH + 60];
+            wsprintfA(m, "site %lu: no rules file at %s", (unsigned long)s->id, pc.file);
+            log_line(m);
+        }
+    } else if (wants_httpdini(s, path)) {
         char m[MAX_PATH + 80];
         wsprintfA(m, "%s: httpd.ini (ISAPI_Rewrite 2) rules aren't supported yet; ignored", pc.file);
         log_line(m);
-    } else if (present) {
-        HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-        if (f != INVALID_HANDLE_VALUE) {
-            DWORD size = GetFileSize(f, NULL), got = 0;
-            char *text = NULL;
-            if (size <= MAX_RULES_FILE && (text = HeapAlloc(GetProcessHeap(), 0, size + 1)) &&
-                ReadFile(f, text, size, &got, NULL)) {
-                um_rules *r = um_parse(text, got, UM_DIALECT_APACHE, parse_log, &pc);
-                if (r && (nr = HeapAlloc(GetProcessHeap(), 0, sizeof *nr))) {
-                    char m[MAX_PATH + 80];
-                    nr->r = r;
-                    nr->refs = 1;
-                    wsprintfA(m, "site %lu: loaded %d rule(s) from %s", (unsigned long)s->id,
-                              um_rules_count(r), pc.file);
-                    log_line(m);
-                } else {
-                    um_rules_free(r);
-                }
-            } else if (size > MAX_RULES_FILE) {
-                char m[MAX_PATH + 60];
-                wsprintfA(m, "%s: too big (over 1 MB), ignored", pc.file);
-                log_line(m);
-            }
-            if (text) HeapFree(GetProcessHeap(), 0, text);
-            CloseHandle(f);
-        }
-    } else if (s->present || lstrcmpiW(path, s->path) != 0) {
-        char m[MAX_PATH + 60];
-        wsprintfA(m, "site %lu: no rules file at %s", (unsigned long)s->id, pc.file);
-        log_line(m);
+    } else {
+        nr = load_rules(s, path, &pc);
     }
     lstrcpynW(s->path, path, MAX_PATH);
     s->present = present;
     if (present) { s->mtime = fa.ftLastWriteTime; s->size = fa.nFileSizeLow; }
     ref_release(s->rules);
     s->rules = nr;
+}
+
+/* The rules file s uses: the one chosen in the tab, or the first of these in its home
+   directory that exists (Automatic tries all three; a chosen format only its own names).
+   "" when there is no home directory. path holds MAX_PATH characters. */
+static void rules_path(const site *s, WCHAR *path)
+{
+    static const WCHAR *const names[] = { L"\\httpd.htaccess", L"\\.htaccess", L"\\httpd.ini" };
+    int first;
+    int last;
+
+    if (s->cfg.source == UM_SRC_FILE) {
+        lstrcpynW(path, s->cfg.rules_file, MAX_PATH);
+        return;
+    }
+    path[0] = 0;
+    if (!s->home[0]) return;
+    first = s->cfg.format == UM_FMT_HTTPDINI ? 2 : 0;
+    last = s->cfg.format == UM_FMT_HTACCESS ? 1 : 2;
+    for (int i = first; i <= last; i++) {
+        lstrcpynW(path, s->home, MAX_PATH - 20);
+        lstrcatW(path, names[i]);
+        if (GetFileAttributesW(path) != 0xFFFFFFFF) return;
+    }
+    lstrcpynW(path, s->home, MAX_PATH - 20);    /* none: watch the first name */
+    lstrcatW(path, names[first]);
 }
 
 /* Bring s up to date as its timers fall due: settings, home directory, rules file. */
@@ -315,26 +376,7 @@ static void refresh_site(site *s)
     }
     if (rules_due) {
         WCHAR path[MAX_PATH];
-        if (s->cfg.source == UM_SRC_FILE) {
-            lstrcpynW(path, s->cfg.rules_file, MAX_PATH);
-        } else if (s->home[0]) {
-            /* the first of these that exists (Automatic tries all three; a chosen
-               format only its own names) */
-            static const WCHAR *names[] = { L"\\httpd.htaccess", L"\\.htaccess", L"\\httpd.ini" };
-            int first = s->cfg.format == UM_FMT_HTTPDINI ? 2 : 0;
-            int last = s->cfg.format == UM_FMT_HTACCESS ? 1 : 2, i;
-            for (i = first; i <= last; i++) {
-                lstrcpynW(path, s->home, MAX_PATH - 20);
-                lstrcatW(path, names[i]);
-                if (GetFileAttributesW(path) != 0xFFFFFFFF) break;
-            }
-            if (i > last) {                     /* none: watch the first name */
-                lstrcpynW(path, s->home, MAX_PATH - 20);
-                lstrcatW(path, names[first]);
-            }
-        } else {
-            path[0] = 0;
-        }
+        rules_path(s, path);
         if (path[0]) refresh_rules(s, path);
         s->rules_at = GetTickCount();
     }
@@ -343,12 +385,15 @@ static void refresh_site(site *s)
 /* A new snapshot of s if it differs from what requests use now, else NULL. */
 static snap *new_snap(site *s)
 {
-    snap *n, *c = s->cur;
-    BOOL enabled = s->cfg.enabled != 0, debug = s->cfg.enabled && s->cfg.debug;
+    const snap *c = s->cur;
+    snap *n;
+    BOOL enabled = s->cfg.enabled != 0;
+    BOOL debug = s->cfg.enabled && s->cfg.debug;
     if (c && c->enabled == enabled && c->debug == debug && c->rules == s->rules &&
         lstrcmpA(c->home_a, s->home_a) == 0)
         return NULL;
-    if (!(n = HeapAlloc(GetProcessHeap(), 0, sizeof *n))) return NULL;
+    n = HeapAlloc(GetProcessHeap(), 0, sizeof *n);
+    if (!n) return NULL;
     n->refs = 1;
     n->enabled = enabled;
     n->debug = debug;
@@ -362,20 +407,23 @@ static snap *new_snap(site *s)
    too many sites. A site's first request loads it. */
 static snap *site_snap(DWORD id)
 {
-    site *s = NULL, *free_slot = NULL;
+    site *s = NULL;
+    site *free_slot = NULL;
     snap *out = NULL;
-    int i;
 
     EnterCriticalSection(&g_lock);
-    for (i = 0; i < MAX_SITES; i++) {
+    for (int i = 0; i < MAX_SITES; i++) {
         if (g_sites[i].id == id) { s = &g_sites[i]; break; }
         if (!free_slot && !g_sites[i].id) free_slot = &g_sites[i];
     }
     if (!s && free_slot) {
+        DWORD due = GetTickCount() - HOME_EVERY - 1;     /* every check due now */
         s = free_slot;
         memset(s, 0, sizeof *s);
         s->id = id;
-        s->cfg_at = s->home_at = s->rules_at = GetTickCount() - HOME_EVERY - 1;
+        s->cfg_at = due;
+        s->home_at = due;
+        s->rules_at = due;
         refresh_site(s);
         s->cur = new_snap(s);
     }
@@ -396,21 +444,22 @@ static DWORD WINAPI refresher(LPVOID unused)
     DWORD scanned = GetTickCount();
     (void)unused;
     while (WaitForSingleObject(g_stop, 1000) == WAIT_TIMEOUT) {
-        int i;
         if (tick_since(scanned) >= SETTINGS_EVERY) {
             update_any(FALSE);
             scanned = GetTickCount();
         }
-        for (i = 0; i < MAX_SITES; i++) {
+        for (int i = 0; i < MAX_SITES; i++) {
             site *s = &g_sites[i];
-            snap *n, *old = NULL;
+            snap *n;
+            snap *old = NULL;
             DWORD id;
             EnterCriticalSection(&g_lock);
             id = s->id;
             LeaveCriticalSection(&g_lock);
             if (!id) continue;
             refresh_site(s);                    /* the slow part, without the lock */
-            if (!(n = new_snap(s))) continue;
+            n = new_snap(s);
+            if (!n) continue;
             EnterCriticalSection(&g_lock);
             old = s->cur;
             s->cur = n;
@@ -444,58 +493,99 @@ typedef struct {
     const char *url;
 } request;
 
-static const char *server_var(request *rq, const char *name, char *buf, size_t cap)
+/* name: not const, as IIS's GetServerVariable takes LPSTR */
+static const char *server_var(const request *rq, char *name, char *buf, size_t cap)
 {
     DWORD n = (DWORD)cap;
-    if (rq->pfc->GetServerVariable(rq->pfc, (LPSTR)name, buf, &n)) return buf;
+    if (rq->pfc->GetServerVariable(rq->pfc, name, buf, &n)) return buf;
     return NULL;
+}
+
+/* the server variables a rule may read by their own names */
+static const char *const SERVER_VARS[] = {
+    "HTTP_HOST", "HTTP_USER_AGENT", "HTTP_REFERER", "HTTP_COOKIE", "HTTP_ACCEPT", "HTTPS",
+    "REMOTE_ADDR", "REMOTE_HOST", "SERVER_NAME", "SERVER_PORT", "SERVER_PROTOCOL", "INSTANCE_ID",
+    NULL
+};
+
+static BOOL is_server_var(const char *name)
+{
+    for (int i = 0; SERVER_VARS[i]; i++)
+        if (ieq(name, SERVER_VARS[i])) return TRUE;
+    return FALSE;
+}
+
+/* "HTTP:" in any case */
+static BOOL is_http_header(const char *name)
+{
+    return (name[0] == 'H' || name[0] == 'h') && (name[1] == 'T' || name[1] == 't') &&
+           (name[2] == 'T' || name[2] == 't') && (name[3] == 'P' || name[3] == 'p') && name[4] == ':';
+}
+
+/* a header name's character in its server variable's name: upper case, '-' -> '_' */
+static char header_var_char(char c)
+{
+    if (c == '-') return '_';
+    if (c >= 'a' && c <= 'z') return (char)(c - 32);
+    return c;
+}
+
+/* %{HTTP:Some-Header} -> server variable HTTP_SOME_HEADER */
+static const char *http_header(const request *rq, const char *name, char *buf, size_t cap)
+{
+    char tmp[200];
+    size_t i = 5;                   /* "HTTP:" and "HTTP_" are the same length */
+    cpy(tmp, "HTTP_", sizeof tmp);
+    while (name[i] && i + 1 < sizeof tmp) {
+        tmp[i] = header_var_char(name[i]);
+        i++;
+    }
+    tmp[i] = 0;
+    return server_var(rq, tmp, buf, cap);
+}
+
+/* REQUEST_FILENAME: the home directory plus the path, with backslashes */
+static const char *request_filename(const request *rq, const char *path, char *buf, size_t cap)
+{
+    if (!rq->home[0]) return NULL;
+    cpy(buf, rq->home, cap);
+    cat(buf, path, cap);
+    for (size_t i = 0; buf[i]; i++) if (buf[i] == '/') buf[i] = '\\';
+    return buf;
+}
+
+/* THE_REQUEST: "GET /url HTTP/1.1" */
+static const char *the_request(const request *rq, char *buf, size_t cap)
+{
+    char tmp[200];
+    DWORD n = sizeof tmp;
+    if (!rq->hdr->GetHeader(rq->pfc, "method", tmp, &n)) return NULL;
+    cpy(buf, tmp, cap);
+    cat(buf, " ", cap);
+    cat(buf, rq->url, cap);
+    n = sizeof tmp;
+    if (rq->hdr->GetHeader(rq->pfc, "version", tmp, &n)) { cat(buf, " ", cap); cat(buf, tmp, cap); }
+    return buf;
 }
 
 static const char *env_var(void *ctx, const char *name, const char *path, char *buf, size_t cap)
 {
-    request *rq = ctx;
-    char tmp[200];
+    const request *rq = ctx;
 
-    if (ieq(name, "REQUEST_FILENAME") || ieq(name, "SCRIPT_FILENAME")) {
-        size_t i;
-        if (!rq->home[0]) return NULL;
-        cpy(buf, rq->home, cap);
-        cat(buf, path, cap);
-        for (i = 0; buf[i]; i++) if (buf[i] == '/') buf[i] = '\\';
-        return buf;
-    }
+    if (ieq(name, "REQUEST_FILENAME") || ieq(name, "SCRIPT_FILENAME"))
+        return request_filename(rq, path, buf, cap);
     if (ieq(name, "DOCUMENT_ROOT")) { cpy(buf, rq->home, cap); return buf; }
     if (ieq(name, "REQUEST_METHOD")) {
         DWORD n = (DWORD)cap;
         return rq->hdr->GetHeader(rq->pfc, "method", buf, &n) ? buf : NULL;
     }
-    if (ieq(name, "THE_REQUEST")) {
-        DWORD n = sizeof tmp;
-        if (!rq->hdr->GetHeader(rq->pfc, "method", tmp, &n)) return NULL;
-        cpy(buf, tmp, cap);
-        cat(buf, " ", cap);
-        cat(buf, rq->url, cap);
-        n = sizeof tmp;
-        if (rq->hdr->GetHeader(rq->pfc, "version", tmp, &n)) { cat(buf, " ", cap); cat(buf, tmp, cap); }
-        return buf;
+    if (ieq(name, "THE_REQUEST")) return the_request(rq, buf, cap);
+    if (is_http_header(name)) return http_header(rq, name, buf, cap);
+    if (is_server_var(name)) {
+        char var[32];
+        cpy(var, name, sizeof var);
+        return server_var(rq, var, buf, cap);
     }
-    if ((name[0] == 'H' || name[0] == 'h') && (name[1] == 'T' || name[1] == 't') &&
-        (name[2] == 'T' || name[2] == 't') && (name[3] == 'P' || name[3] == 'p') && name[4] == ':') {
-        /* %{HTTP:Some-Header} -> server variable HTTP_SOME_HEADER */
-        size_t i, j = 5;
-        cpy(tmp, "HTTP_", sizeof tmp);
-        for (i = 5; name[i] && j + 1 < sizeof tmp; i++, j++) {
-            char c = name[i];
-            tmp[j] = c == '-' ? '_' : (c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
-        }
-        tmp[j] = 0;
-        return server_var(rq, tmp, buf, cap);
-    }
-    if (ieq(name, "HTTP_HOST") || ieq(name, "HTTP_USER_AGENT") || ieq(name, "HTTP_REFERER") ||
-        ieq(name, "HTTP_COOKIE") || ieq(name, "HTTP_ACCEPT") || ieq(name, "HTTPS") ||
-        ieq(name, "REMOTE_ADDR") || ieq(name, "REMOTE_HOST") || ieq(name, "SERVER_NAME") ||
-        ieq(name, "SERVER_PORT") || ieq(name, "SERVER_PROTOCOL") || ieq(name, "INSTANCE_ID"))
-        return server_var(rq, name, buf, cap);
     return NULL;
 }
 
@@ -510,7 +600,7 @@ static int env_file_type(void *ctx, const char *fspath)
 /* ---------------------------------------------------------------- responses */
 
 /* TRUE if the request has this header, or if we can't tell; v gets its value when it fits */
-static BOOL has_header(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr, char *name,
+static BOOL has_header(HTTP_FILTER_CONTEXT *pfc, const HTTP_FILTER_PREPROC_HEADERS *hdr, char *name,
                        char *v, DWORD cap)
 {
     DWORD n = cap;
@@ -522,12 +612,17 @@ static BOOL has_header(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hd
 /* Send a whole small response in one piece (headers and body together: two small sends can
    stall on Nagle + delayed ACK). GET and HEAD over HTTP/1.1 without a body keep the
    connection open, so a proxy in front can reuse it. */
-static DWORD respond(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr,
+static DWORD respond(HTTP_FILTER_CONTEXT *pfc, const HTTP_FILTER_PREPROC_HEADERS *hdr,
                      const char *status, const char *location)
 {
-    char buf[URL_CAP + 700], body[300], method[16], version[16];
+    char buf[URL_CAP + 700];
+    char body[300];
+    char method[16];
+    char version[16];
+    char st[64];                    /* status, as SF_REQ_SEND_RESPONSE_HEADER wants it writable */
     DWORD n;
-    BOOL head, keep;
+    BOOL head;
+    BOOL keep;
 
     n = sizeof method;
     if (!hdr->GetHeader(pfc, "method", method, &n)) method[0] = 0;
@@ -554,7 +649,8 @@ static DWORD respond(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr,
     wsprintfA(buf + n, "Content-Type: text/html\r\nContent-Length: %u\r\n%s\r\n",
               (unsigned)strlen(body), keep ? "" : "Connection: close\r\n");
     if (!head) cat(buf, body, sizeof buf);
-    pfc->ServerSupportFunction(pfc, SF_REQ_SEND_RESPONSE_HEADER, (PVOID)status, (ULONG_PTR)buf, 0);
+    cpy(st, status, sizeof st);
+    pfc->ServerSupportFunction(pfc, SF_REQ_SEND_RESPONSE_HEADER, st, (ULONG_PTR)buf, 0);
     return keep ? SF_STATUS_REQ_FINISHED_KEEP_CONN : SF_STATUS_REQ_FINISHED;
 }
 
@@ -571,59 +667,96 @@ static const char *redirect_status(int code)
 
 /* ---------------------------------------------------------------- ISAPI exports */
 
+/* subkey i of k into name (cap characters); FALSE when there are no more */
+static BOOL enum_key(HKEY k, DWORD i, WCHAR *name, DWORD cap)
+{
+    DWORD n = cap;
+    return RegEnumKeyExW(k, i, name, &n, NULL, NULL, NULL, NULL) == ERROR_SUCCESS;
+}
+
+/* a site's key name as its number; 0 if it isn't one */
+static DWORD site_number(const WCHAR *name)
+{
+    DWORD id = 0;
+    const WCHAR *p = name;
+    for (; *p >= L'0' && *p <= L'9'; p++) id = id * 10 + (DWORD)(*p - L'0');
+    return *p ? 0 : id;
+}
+
+static void log_site(const WCHAR *service, DWORD id, const um_site *cfg)
+{
+    static const char *const fmts[] = { "automatic", "Apache", "httpd.ini" };
+    char sv[32];
+    char file[MAX_PATH];
+    char m[MAX_PATH + 160];
+
+    to_ansi(service, sv, sizeof sv);
+    if (cfg->source == UM_SRC_FILE)
+        to_ansi(cfg->rules_file, file, MAX_PATH);
+    else
+        lstrcpyA(file, "the site's home directory");
+    wsprintfA(m, "site %s/%lu: rewriting %s, format %s, rules from %s%s", sv, (unsigned long)id,
+              cfg->enabled ? "on" : "off", fmts[cfg->format <= 2 ? cfg->format : 0], file,
+              cfg->debug ? ", debug on" : "");
+    log_line(m);
+}
+
+typedef struct {
+    BOOL log;                       /* write a line per site */
+    int count;                      /* sites that are on */
+    BOOL any_debug;                 /* any of them logs debug lines */
+} scan;
+
+/* the sites of one service (Sites\<service>\<n>) */
+static void scan_service(HKEY root, const WCHAR *service, scan *sc)
+{
+    HKEY svc;
+    WCHAR inst[16];
+
+    if (RegOpenKeyExW(root, service, 0, KEY_READ, &svc) != ERROR_SUCCESS) return;
+    for (DWORD j = 0; enum_key(svc, j, inst, 16); j++) {
+        um_site cfg;
+        DWORD id = site_number(inst);
+        if (!id) continue;
+        um_site_read(HKEY_LOCAL_MACHINE, service, id, &cfg);
+        if (cfg.enabled) {
+            sc->count++;
+            if (cfg.debug) sc->any_debug = TRUE;
+        }
+        if (sc->log) log_site(service, id, &cfg);
+    }
+    RegCloseKey(svc);
+}
+
 /* Count the sites that are on (and see whether any logs debug lines); with log, also write one
    line per site that has URL Magic settings (Sites\<service>\<n>). */
 static int scan_sites(BOOL log, BOOL *any_debug)
 {
-    static const char *fmts[] = { "automatic", "Apache", "httpd.ini" };
-    HKEY root, svc;
-    WCHAR service[32], inst[16];
-    DWORD i, j, n;
-    int count = 0;
+    HKEY root;
+    WCHAR service[32];
+    scan sc;
 
+    sc.log = log;
+    sc.count = 0;
+    sc.any_debug = FALSE;
     *any_debug = FALSE;
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UM_REG_SITES, 0, KEY_READ, &root) != ERROR_SUCCESS) {
         if (log) log_line("no site has URL Magic turned on yet");
         return 0;
     }
-    for (i = 0; n = 32, RegEnumKeyExW(root, i, service, &n, NULL, NULL, NULL, NULL) == ERROR_SUCCESS; i++) {
-        if (RegOpenKeyExW(root, service, 0, KEY_READ, &svc) != ERROR_SUCCESS) continue;
-        for (j = 0; n = 16, RegEnumKeyExW(svc, j, inst, &n, NULL, NULL, NULL, NULL) == ERROR_SUCCESS; j++) {
-            um_site cfg;
-            DWORD id = 0;
-            const WCHAR *p;
-            char sv[32], file[MAX_PATH], m[MAX_PATH + 160];
-            for (p = inst; *p >= L'0' && *p <= L'9'; p++) id = id * 10 + (DWORD)(*p - L'0');
-            if (!id || *p) continue;
-            um_site_read(HKEY_LOCAL_MACHINE, service, id, &cfg);
-            if (cfg.enabled) {
-                count++;
-                if (cfg.debug) *any_debug = TRUE;
-            }
-            if (!log) continue;
-            to_ansi(service, sv, sizeof sv);
-            if (cfg.source == UM_SRC_FILE)
-                to_ansi(cfg.rules_file, file, MAX_PATH);
-            else
-                lstrcpyA(file, "the site's home directory");
-            wsprintfA(m, "site %s/%lu: rewriting %s, format %s, rules from %s%s", sv, (unsigned long)id,
-                      cfg.enabled ? "on" : "off", fmts[cfg.format <= 2 ? cfg.format : 0], file,
-                      cfg.debug ? ", debug on" : "");
-            log_line(m);
-        }
-        RegCloseKey(svc);
-    }
+    for (DWORD i = 0; enum_key(root, i, service, 32); i++) scan_service(root, service, &sc);
     RegCloseKey(root);
-    if (log && !count) log_line("no site has URL Magic turned on yet");
-    return count;
+    if (log && !sc.count) log_line("no site has URL Magic turned on yet");
+    *any_debug = sc.any_debug;
+    return sc.count;
 }
 
 static void update_any(BOOL log)
 {
     BOOL dbg;
     int on = scan_sites(log, &dbg);
-    InterlockedExchange((LONG *)&g_any_on, on > 0);
-    InterlockedExchange((LONG *)&g_any_debug, dbg);
+    InterlockedExchange(&g_any_on, on > 0);
+    InterlockedExchange(&g_any_debug, dbg);
 }
 
 BOOL WINAPI GetFilterVersion(HTTP_FILTER_VERSION *ver)
@@ -655,7 +788,11 @@ static void fmt_time(char *out, LONGLONG ticks, LONGLONG freq)
    filter 60 µs" (filter = the whole request in URL Magic, rules included) */
 static void debug_line(request *rq, DWORD id, const um_result *res, LONGLONG rules, LONGLONG total)
 {
-    char m[URL_CAP * 2 + 200], method[16], host[128], what[URL_CAP + 40], took[40];
+    char m[URL_CAP * 2 + 200];
+    char method[16];
+    char host[128];
+    char what[URL_CAP + 40];
+    char took[40];
     DWORD n;
     LARGE_INTEGER freq;
     LONGLONG f = QueryPerformanceFrequency(&freq) ? freq.QuadPart : 0;
@@ -698,22 +835,23 @@ static DWORD preproc(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr,
                      LARGE_INTEGER ts)
 {
     char idbuf[16];
-    DWORD n, id = 0;
+    DWORD n;
+    DWORD id = 0;
     snap *sn;
     um_scratch *sc;
     request rq;
     um_env env;
     um_result res;
-    const char *p;
     DWORD ret = SF_STATUS_REQ_NEXT_NOTIFICATION;
-    LARGE_INTEGER t0, t1;
+    LARGE_INTEGER t0;
+    LARGE_INTEGER t1;
 
     if (um_is_rules_file(url)) return respond(pfc, hdr, "403 Forbidden", NULL);
     if (!g_any_on) return ret;                  /* URL Magic is off everywhere */
 
     n = sizeof idbuf;
     if (!pfc->GetServerVariable(pfc, "INSTANCE_ID", idbuf, &n)) return ret;
-    for (p = idbuf; *p >= '0' && *p <= '9'; p++) id = id * 10 + (DWORD)(*p - '0');
+    for (const char *p = idbuf; *p >= '0' && *p <= '9'; p++) id = id * 10 + (DWORD)(*p - '0');
     if (!id) return ret;
 
     sn = site_snap(id);
@@ -796,8 +934,10 @@ static char *long_url(HTTP_FILTER_CONTEXT *pfc, const HTTP_FILTER_PREPROC_HEADER
 DWORD WINAPI HttpFilterProc(HTTP_FILTER_CONTEXT *pfc, DWORD type, LPVOID data)
 {
     HTTP_FILTER_PREPROC_HEADERS *hdr = data;
-    char buf[URL_CAP], *url = buf;
-    DWORD n = sizeof buf, ret;
+    char buf[URL_CAP];
+    char *url = buf;
+    DWORD n = sizeof buf;
+    DWORD ret;
     LARGE_INTEGER ts;
 
     if (type != SF_NOTIFY_PREPROC_HEADERS) return SF_STATUS_REQ_NEXT_NOTIFICATION;
@@ -807,7 +947,8 @@ DWORD WINAPI HttpFilterProc(HTTP_FILTER_CONTEXT *pfc, DWORD type, LPVOID data)
         /* a long URL (a long query string) is checked all the same: otherwise
            "/httpd.htaccess?" and 5000 more characters would fetch the rules file */
         if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) return SF_STATUS_REQ_NEXT_NOTIFICATION;
-        if (!(url = long_url(pfc, hdr))) return respond(pfc, hdr, "414 Request-URI Too Long", NULL);
+        url = long_url(pfc, hdr);
+        if (!url) return respond(pfc, hdr, "414 Request-URI Too Long", NULL);
     }
     ret = preproc(pfc, hdr, url, ts);
     if (url != buf) HeapFree(GetProcessHeap(), 0, url);
@@ -816,7 +957,6 @@ DWORD WINAPI HttpFilterProc(HTTP_FILTER_CONTEXT *pfc, DWORD type, LPVOID data)
 
 BOOL WINAPI TerminateFilter(DWORD flags)
 {
-    int i;
     (void)flags;
     if (g_thread) {
         /* no timeout: the sites must outlive the thread (a dead share can hold a check up
@@ -828,7 +968,7 @@ BOOL WINAPI TerminateFilter(DWORD flags)
     }
     if (g_stop) { CloseHandle(g_stop); g_stop = NULL; }
     EnterCriticalSection(&g_lock);
-    for (i = 0; i < MAX_SITES; i++) {
+    for (int i = 0; i < MAX_SITES; i++) {
         snap_release(g_sites[i].cur);
         ref_release(g_sites[i].rules);
         g_sites[i].cur = NULL;

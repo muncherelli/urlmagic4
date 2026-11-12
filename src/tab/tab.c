@@ -58,9 +58,9 @@ static LONG g_locks;
 
 static BOOL guid_eq(const GUID *a, const GUID *b)
 {
-    const unsigned char *x = (const unsigned char *)a, *y = (const unsigned char *)b;
-    int i;
-    for (i = 0; i < 16; i++)
+    const unsigned char *x = (const unsigned char *)a;
+    const unsigned char *y = (const unsigned char *)b;
+    for (int i = 0; i < 16; i++)
         if (x[i] != y[i]) return FALSE;
     return TRUE;
 }
@@ -88,7 +88,7 @@ static BOOL get_format(IDataObject *dobj, const WCHAR *name, void *buf, DWORD ca
     sm.hGlobal = h;
     sm.pUnkForRelease = NULL;
     if (SUCCEEDED(IDataObject_GetDataHere(dobj, &fe, &sm))) {
-        BYTE *p = GlobalLock(sm.hGlobal);
+        const BYTE *p = GlobalLock(sm.hGlobal);
         if (p) {
             DWORD n = (DWORD)GlobalSize(sm.hGlobal);
             memcpy(buf, p, n < cap ? n : cap);
@@ -151,7 +151,8 @@ static BOOL read_node(IDataObject *dobj, page_state *ps)
 /* HKLM of the machine the IIS manager is connected to. *remote says whether to close it. */
 static LONG open_hklm(const WCHAR *machine, HKEY *hklm, BOOL *remote)
 {
-    WCHAR local[MAX_COMPUTERNAME_LENGTH + 1], unc[80];
+    WCHAR local[MAX_COMPUTERNAME_LENGTH + 1];
+    WCHAR unc[80];
     DWORD n = MAX_COMPUTERNAME_LENGTH + 1;
 
     *remote = FALSE;
@@ -174,7 +175,7 @@ static LONG load_site(page_state *ps)
     return r;
 }
 
-static LONG save_site(page_state *ps)
+static LONG save_site(const page_state *ps)
 {
     HKEY hklm;
     BOOL remote;
@@ -193,8 +194,7 @@ static void update_controls(HWND dlg)
     BOOL file = IsDlgButtonChecked(dlg, IDC_SRC_FILE) == BST_CHECKED;
     static const int group[] = { IDC_FMT_GROUP, IDC_FMT_AUTO, IDC_FMT_HTACCESS, IDC_FMT_HTTPDINI,
                                  IDC_SRC_GROUP, IDC_SRC_DOCROOT, IDC_SRC_FILE, IDC_DEBUG, 0 };
-    int i;
-    for (i = 0; group[i]; i++) EnableWindow(GetDlgItem(dlg, group[i]), on);
+    for (int i = 0; group[i]; i++) EnableWindow(GetDlgItem(dlg, group[i]), on);
     EnableWindow(GetDlgItem(dlg, IDC_FILE), on && file);
     EnableWindow(GetDlgItem(dlg, IDC_BROWSE), on && file);
 }
@@ -245,8 +245,10 @@ static BOOL read_page(HWND dlg, page_state *ps)
     um_site s;
     um_site_defaults(&s);
     s.enabled = IsDlgButtonChecked(dlg, IDC_ENABLED) == BST_CHECKED;
-    s.format = IsDlgButtonChecked(dlg, IDC_FMT_HTACCESS) == BST_CHECKED ? UM_FMT_HTACCESS :
-               IsDlgButtonChecked(dlg, IDC_FMT_HTTPDINI) == BST_CHECKED ? UM_FMT_HTTPDINI : UM_FMT_AUTO;
+    if (IsDlgButtonChecked(dlg, IDC_FMT_HTACCESS) == BST_CHECKED)
+        s.format = UM_FMT_HTACCESS;
+    else if (IsDlgButtonChecked(dlg, IDC_FMT_HTTPDINI) == BST_CHECKED)
+        s.format = UM_FMT_HTTPDINI;
     s.source = IsDlgButtonChecked(dlg, IDC_SRC_FILE) == BST_CHECKED ? UM_SRC_FILE : UM_SRC_DOCROOT;
     GetDlgItemTextW(dlg, IDC_FILE, s.rules_file, MAX_PATH);
     s.debug = IsDlgButtonChecked(dlg, IDC_DEBUG) == BST_CHECKED;
@@ -268,19 +270,19 @@ static void fit_width(HWND dlg, page_state *ps, int width)
                                    IDC_FMT_NGINX, IDC_SRC_GROUP, IDC_SRC_DOCROOT, IDC_SRC_FILE,
                                    IDC_FILE, IDC_DEBUG, IDC_NOTE, IDC_SITE, IDC_REPO, 0 };
     static const int move[] = { IDC_BROWSE, IDC_VERSION, 0 };
-    int dx = width - ps->width, i;
+    int dx = width - ps->width;
     RECT r;
     HWND c;
 
     if (dx == 0) return;
-    for (i = 0; stretch[i]; i++) {
+    for (int i = 0; stretch[i]; i++) {
         c = GetDlgItem(dlg, stretch[i]);
         GetWindowRect(c, &r);
         MapWindowPoints(NULL, dlg, (POINT *)&r, 2);
         SetWindowPos(c, NULL, 0, 0, r.right - r.left + dx, r.bottom - r.top,
                      SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
     }
-    for (i = 0; move[i]; i++) {
+    for (int i = 0; move[i]; i++) {
         c = GetDlgItem(dlg, move[i]);
         GetWindowRect(c, &r);
         MapWindowPoints(NULL, dlg, (POINT *)&r, 2);
@@ -344,13 +346,15 @@ static INT_PTR CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             SetWindowLongPtrW(dlg, DWLP_MSGRESULT, PSNRET_NOERROR);
             return TRUE;
         }
+        default:
+            break;
         }
         break;
     }
     return FALSE;
 }
 
-static UINT CALLBACK page_cb(HWND hwnd, UINT msg, PROPSHEETPAGEW *psp)
+static UINT CALLBACK page_cb(HWND hwnd, UINT msg, PROPSHEETPAGEW *psp)   /* NOSONAR: signature fixed by PropSheetPageProc */
 {
     (void)hwnd;
     if (msg == PSPCB_RELEASE) {
@@ -394,7 +398,7 @@ static ULONG WINAPI tab_release(IExtendPropertySheet *This)
     return r;
 }
 
-static HRESULT WINAPI tab_create_pages(IExtendPropertySheet *This, LPPROPERTYSHEETCALLBACK cb,
+static HRESULT WINAPI tab_create_pages(IExtendPropertySheet *This, LPPROPERTYSHEETCALLBACK cb,   /* NOSONAR: signature fixed by COM */
                                        LONG_PTR handle, LPDATAOBJECT dobj)
 {
     PROPSHEETPAGEW psp;
@@ -427,7 +431,7 @@ static HRESULT WINAPI tab_create_pages(IExtendPropertySheet *This, LPPROPERTYSHE
     return hr;
 }
 
-static HRESULT WINAPI tab_query_pages(IExtendPropertySheet *This, LPDATAOBJECT dobj)
+static HRESULT WINAPI tab_query_pages(IExtendPropertySheet *This, LPDATAOBJECT dobj)   /* NOSONAR: signature fixed by COM */
 {
     page_state ps;
     (void)This;
@@ -451,10 +455,10 @@ static HRESULT WINAPI cf_qi(IClassFactory *This, REFIID riid, void **ppv)
     return E_NOINTERFACE;
 }
 
-static ULONG WINAPI cf_addref(IClassFactory *This) { (void)This; return 2; }
-static ULONG WINAPI cf_release(IClassFactory *This) { (void)This; return 1; }
+static ULONG WINAPI cf_addref(IClassFactory *This) { (void)This; return 2; }   /* NOSONAR: signature fixed by COM */
+static ULONG WINAPI cf_release(IClassFactory *This) { (void)This; return 1; }  /* NOSONAR: signature fixed by COM */
 
-static HRESULT WINAPI cf_create(IClassFactory *This, IUnknown *outer, REFIID riid, void **ppv)
+static HRESULT WINAPI cf_create(IClassFactory *This, IUnknown *outer, REFIID riid, void **ppv)   /* NOSONAR: signature fixed by COM */
 {
     Tab *t;
     HRESULT hr;
@@ -471,7 +475,7 @@ static HRESULT WINAPI cf_create(IClassFactory *This, IUnknown *outer, REFIID rii
     return hr;
 }
 
-static HRESULT WINAPI cf_lock(IClassFactory *This, BOOL lock)
+static HRESULT WINAPI cf_lock(IClassFactory *This, BOOL lock)   /* NOSONAR: signature fixed by COM */
 {
     (void)This;
     if (lock) InterlockedIncrement(&g_locks); else InterlockedDecrement(&g_locks);
@@ -511,7 +515,8 @@ static LONG set_str(HKEY root, const WCHAR *path, const WCHAR *name, const WCHAR
 static void delete_tree(HKEY root, const WCHAR *path)
 {
     HKEY k;
-    WCHAR sub[256], full[600];
+    WCHAR sub[256];
+    WCHAR full[600];
     if (RegOpenKeyExW(root, path, 0, KEY_ALL_ACCESS, &k) == ERROR_SUCCESS) {
         for (;;) {
             DWORD n = 256;
@@ -526,7 +531,8 @@ static void delete_tree(HKEY root, const WCHAR *path)
 
 HRESULT WINAPI DllRegisterServer(void)
 {
-    WCHAR dll[MAX_PATH], path[300];
+    WCHAR dll[MAX_PATH];
+    WCHAR path[300];
     LONG r;
 
     GetModuleFileNameW(g_hinst, dll, MAX_PATH);
