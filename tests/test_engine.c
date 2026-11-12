@@ -213,8 +213,8 @@ int main(void)
     check("%00 in the path", "RewriteEngine On\nRewriteRule \\.cfm$ - [F]\n", "/x.cfm%00.jpg",
           UM_FORBIDDEN, 403, NULL);
 
-    /* the path is tidied before the rules see it, the way IIS will map it: "..", "." and "//"
-       can't be used to get past a rule */
+    /* the path is tidied before the rules see it, the way IIS will map it: "..", "." and double
+       slashes can't be used to get past a rule */
     {
         static const char *DENY = "RewriteEngine On\nRewriteRule ^admin - [F]\n";
         static const char *SNEAKY[] = {
@@ -232,7 +232,7 @@ int main(void)
           "/a/../b", UM_REWRITE, 0, "/c?u=/b");
     check("clean path: dots inside names stay", FRONT, "/a..b/.c/c.", UM_REWRITE, 0, "/index.cfm?page=a..b/.c/c.");
 
-    /* a redirect never names another host by accident ("//host" is one) */
+    /* a redirect never names another host by accident (a path after two slashes is one) */
     check("redirect: //host from the trailing-slash rule", "RewriteEngine On\nRewriteRule ^(.*)/$ /$1 [R=301,L]\n",
           "//evil.example/", UM_REDIRECT, 301, "/evil.example");
     check("redirect: //host from a capture", "RewriteEngine On\nRewriteRule ^x(.*)$ /$1 [R,L]\n",
@@ -271,7 +271,7 @@ int main(void)
             "/PROGRA~1", "/HTTPD~1.HTM", "/httpd~x.hta", "/httpd~1", "/a.htaccess", "/%zz", "", NULL
         };
         int i;
-        strcpy(dots, "/httpd.htaccess");             /* and 150 dots, which Windows drops */
+        memcpy(dots, "/httpd.htaccess", 15);         /* and 150 dots, which Windows drops */
         memset(dots + 15, '.', 150);
         for (i = 0; YES[i]; i++) {
             if (um_is_rules_file(YES[i])) passed++;

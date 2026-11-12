@@ -845,9 +845,11 @@ static BOOL lock_sd(int kind, DWORD *aclbuf, DWORD size, SECURITY_DESCRIPTOR *sd
     PACL acl = (PACL)aclbuf;
     DWORD full = kind == LOCK_KEY ? KEY_ALL_ACCESS : FILE_ALL_ACCESS;
     DWORD read = kind == LOCK_KEY ? KEY_READ : FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
-    BYTE inherit = kind == LOCK_DIR ? OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE :
-                   kind == LOCK_KEY ? CONTAINER_INHERIT_ACE : 0;
-    BOOL ok = AllocateAndInitializeSid(&nt, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS,
+    BYTE inherit = 0;
+    BOOL ok;
+    if (kind == LOCK_DIR) inherit = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
+    else if (kind == LOCK_KEY) inherit = CONTAINER_INHERIT_ACE;
+    ok =AllocateAndInitializeSid(&nt, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS,
                                        0, 0, 0, 0, 0, 0, &admins) &&
               AllocateAndInitializeSid(&nt, 1, SECURITY_LOCAL_SYSTEM_RID, 0, 0, 0, 0, 0, 0, 0, &sys) &&
               AllocateAndInitializeSid(&world, 1, SECURITY_WORLD_RID, 0, 0, 0, 0, 0, 0, 0, &everyone) &&
@@ -886,14 +888,17 @@ static void lock_key(HKEY root, const WCHAR *path)
     SECURITY_DESCRIPTOR sd;
     WCHAR sub[256], full[600];
     HKEY k;
-    DWORD i, n;
+    DWORD i = 0, n = 256;
     if (!lock_sd(LOCK_KEY, aclbuf, sizeof aclbuf, &sd)) return;
     if (RegOpenKeyExW(root, path, 0, WRITE_DAC | KEY_ENUMERATE_SUB_KEYS, &k) != ERROR_SUCCESS) return;
     RegSetKeySecurity(k, DACL_SECURITY_INFORMATION, &sd);
-    for (i = 0; n = 256, RegEnumKeyExW(k, i, sub, &n, NULL, NULL, NULL, NULL) == ERROR_SUCCESS; i++) {
-        if (lstrlenW(path) + lstrlenW(sub) + 2 > 600) continue;
-        wsprintfW(full, L"%s\\%s", path, sub);
-        lock_key(root, full);
+    while (RegEnumKeyExW(k, i, sub, &n, NULL, NULL, NULL, NULL) == ERROR_SUCCESS) {
+        if (lstrlenW(path) + lstrlenW(sub) + 2 <= 600) {
+            wsprintfW(full, L"%s\\%s", path, sub);
+            lock_key(root, full);
+        }
+        i++;
+        n = 256;
     }
     RegCloseKey(k);
 }
@@ -1025,12 +1030,43 @@ static DWORD extract(int id, const WCHAR *path)
     return err;
 }
 
-static int install(const WCHAR *dir)
+/* The install folder, made if need be. One we made (now or at an earlier install) gets our
+   permissions; one that was already there for something else keeps its own. */
+enum { DIR_FOREIGN, DIR_LOCKED, DIR_UNLOCKED };
+
+static int make_dir(const WCHAR *dir)
+{
+    WCHAR was[MAX_PATH];
+    if (!CreateDirectoryW(dir, NULL) && !(installed_dir(was) && lstrcmpiW(was, dir) == 0))
+        return DIR_FOREIGN;
+    return lock_path(dir, LOCK_DIR) ? DIR_LOCKED : DIR_UNLOCKED;
+}
+
+/* our files in dir: a rewritten file keeps the permissions it had, so each one gets ours */
+static void lock_files(const WCHAR *dir)
 {
     static const WCHAR *LOGS[] = { L"urlmagic4.log", L"urlmagic4.log.old", NULL };
-    WCHAR src[MAX_PATH], from[MAX_PATH], to[MAX_PATH];
-    BOOL running = FALSE, ours, locked = FALSE;
+    WCHAR f[MAX_PATH];
     int i;
+    join(f, dir, g_self);
+    lock_path(f, LOCK_FILE);
+    for (i = 0; FILES[i]; i++) { join(f, dir, FILES[i]); lock_path(f, LOCK_FILE); }
+    for (i = 0; LOGS[i]; i++) { join(f, dir, LOGS[i]); lock_path(f, LOCK_FILE); }
+}
+
+static void dir_note(int state)
+{
+    if (state == DIR_FOREIGN)
+        note("The install folder's own permissions were left as they were: make sure only administrators can change files in it.");
+    else if (state == DIR_UNLOCKED)
+        note("Couldn't restrict who may change the install folder (a FAT drive?): only administrators should be able to.");
+}
+
+static int install(const WCHAR *dir)
+{
+    WCHAR src[MAX_PATH], from[MAX_PATH], to[MAX_PATH];
+    BOOL running = FALSE;
+    int i, dirstate;
 
     dir_of_exe(src);
     {
@@ -1046,13 +1082,7 @@ static int install(const WCHAR *dir)
     ok();
 
     step("Unpacking files");
-    {
-        /* a folder we made (now or at an earlier install) gets our permissions; one that was
-           already there for something else keeps its own */
-        WCHAR was[MAX_PATH];
-        ours = CreateDirectoryW(dir, NULL) || (installed_dir(was) && lstrcmpiW(was, dir) == 0);
-        if (ours) locked = lock_path(dir, LOCK_DIR);
-    }
+    dirstate = make_dir(dir);
     for (i = 0; FILES[i]; i++) {
         DWORD e;
         int tries;
@@ -1079,13 +1109,9 @@ static int install(const WCHAR *dir)
     join(from, src, g_self);
     join(to, dir, g_self);
     if (lstrcmpiW(from, to) != 0) CopyFileW(from, to, FALSE);
-    /* rewritten files keep the permissions they had, so set them on each file too */
-    lock_path(to, LOCK_FILE);
-    for (i = 0; FILES[i]; i++) { join(to, dir, FILES[i]); lock_path(to, LOCK_FILE); }
-    for (i = 0; LOGS[i]; i++) { join(to, dir, LOGS[i]); lock_path(to, LOCK_FILE); }
+    lock_files(dir);
     ok();
-    if (!ours) note("The install folder's own permissions were left as they were: make sure only administrators can change files in it.");
-    else if (!locked) note("Couldn't restrict who may change the install folder (a FAT drive?): only administrators should be able to.");
+    dir_note(dirstate);
     record_dir(dir);
 
     step("Registering the URL Magic tab");

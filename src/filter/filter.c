@@ -94,8 +94,8 @@ static void log_line(const char *msg)
     cat(line, msg, sizeof line - 3);
     {
         /* one entry, one line: control characters from a request can't fake entries */
-        char *p;
-        for (p = line; *p; p++) if ((unsigned char)*p < 0x20 || *p == 0x7f) *p = '?';
+        for (char *p = line; *p; p++)
+            if ((unsigned char)*p < 0x20 || *p == 0x7f) *p = '?';
     }
     cat(line, "\r\n", sizeof line);
 
@@ -778,10 +778,9 @@ static DWORD preproc(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr,
 }
 
 /* a URL too long for URL_CAP, in a heap block (HeapFree it); NULL if over URL_MAX */
-static char *long_url(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr)
+static char *long_url(HTTP_FILTER_CONTEXT *pfc, const HTTP_FILTER_PREPROC_HEADERS *hdr)
 {
-    DWORD cap;
-    for (cap = URL_CAP * 2; cap <= URL_MAX; cap *= 2) {
+    for (DWORD cap = URL_CAP * 2; cap <= URL_MAX; cap *= 2) {
         DWORD n = cap;
         char *u = HeapAlloc(GetProcessHeap(), 0, cap);
         BOOL more;
