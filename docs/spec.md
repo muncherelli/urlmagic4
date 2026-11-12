@@ -61,7 +61,9 @@ RewriteRule ^(.*)$ index.cfm?page=$1 [L,QSA]
 * Errors are written to `urlmagic4.log` next to the DLL, with file and line (rotated at 1 MB
   to `urlmagic4.log.old`). A bad line is skipped; the rest of the file still loads.
 * The filter always refuses requests for `httpd.htaccess`, `.htaccess`, `httpd.ini`,
-  `httpd.parse.errors`, `nginx.conf` and `urlmagic4.conf` (any folder, any case) with 403, so
+  `httpd.parse.errors`, `nginx.conf` and `urlmagic4.conf` with 403 (any folder, any case, and
+  any other spelling Windows opens them by: `%XX`, trailing dots, `::$DATA`, 8.3 names such as
+  `HTTPD~1.HTA`), and also refuses a rule that rewrites to one, so
   rule files can't be downloaded.
 * 4.0 reads the rules file only in the site root. **Planned:** an `httpd.htaccess`/`.htaccess`
   in any folder, applying to that folder and below exactly as in Apache: its rules see the
@@ -105,6 +107,11 @@ are ignored and what's inside is read, so copied files still load.
 * **What `RewriteRule` sees:** the URL path, %-decoded, **without the leading `/`** and
   without the query string (as Apache per-directory context). `/about/team?x=1` → `about/team`.
   The server file sees the same (with a leading `/`, as Apache server context).
+  The decoded path is tidied first, as Apache does and as IIS will when it maps it to a file:
+  `\` counts as `/`, `//` becomes `/`, `.` segments go and `..` removes the segment before it
+  (never above the root). So `/x/../admin` and `//admin` are both `admin` to a rule.
+* A redirect to a path never starts with `//` (that would name another host): `/$1` with
+  `$1` = `/evil.example` redirects to `/evil.example`.
 * Patterns are PCRE (Perl-compatible) regexes, not anchored unless you write `^`/`$`.
   A leading `!` negates the pattern (then no `$N` groups).
 * Rules run once, top to bottom: server file first (later), then the site's rules file.
@@ -145,7 +152,7 @@ are ignored and what's inside is read, so copied files still load.
 | `QSD` | drop the original query string |
 | `F` | 403 Forbidden |
 | `G` | 410 Gone |
-| `NE` | don't %-escape the substitution |
+| `NE` | don't %-escape the substitution (control characters such as CR and LF still are) |
 | `C` | chain: skip the following rules if this one doesn't match |
 | `S=N` | skip the next N rules |
 

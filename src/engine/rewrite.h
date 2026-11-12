@@ -59,4 +59,9 @@ int um_apply_s(const um_rules *r, const char *url, const um_env *env, um_scratch
 int um_apply(const um_rules *r, const char *url, const um_env *env, um_result *out);
 void um_result_free(um_result *res);
 
+/* Does url ("/path?query", %-encoded) ask for a rules file (httpd.htaccess, .htaccess,
+   httpd.ini, ...) in any folder, under any spelling Windows would open it by: any case, %XX,
+   "\" for "/", trailing dots or spaces, "::$DATA", or its 8.3 alias? */
+int um_is_rules_file(const char *url);
+
 #endif
