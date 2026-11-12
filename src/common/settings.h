@@ -29,8 +29,8 @@ enum { UM_SRC_DOCROOT = 0, UM_SRC_FILE = 1 };
 
 typedef struct {
     DWORD enabled;
-    DWORD format;                 /* UM_FMT_* */
-    DWORD source;                 /* UM_SRC_* */
+    DWORD format;                 /* one of the UM_FMT_ values */
+    DWORD source;                 /* one of the UM_SRC_ values */
     WCHAR rules_file[MAX_PATH];
     DWORD debug;                  /* log each request and its timing */
 } um_site;

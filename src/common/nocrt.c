@@ -10,7 +10,8 @@
 void *memset(void *d, int c, size_t n)
 {
     void *r = d;
-    size_t w = n >> 2, b = n & 3;
+    size_t w = n >> 2;
+    size_t b = n & 3;
     unsigned v = (unsigned char)c * 0x01010101u;
     __asm__ volatile ("rep stosl" : "+D"(d), "+c"(w) : "a"(v) : "memory");
     __asm__ volatile ("rep stosb" : "+D"(d), "+c"(b) : "a"(v) : "memory");
@@ -20,7 +21,8 @@ void *memset(void *d, int c, size_t n)
 void *memcpy(void *d, const void *s, size_t n)
 {
     void *r = d;
-    size_t w = n >> 2, b = n & 3;
+    size_t w = n >> 2;
+    size_t b = n & 3;
     __asm__ volatile ("rep movsl" : "+D"(d), "+S"(s), "+c"(w) : : "memory");
     __asm__ volatile ("rep movsb" : "+D"(d), "+S"(s), "+c"(b) : : "memory");
     return r;
@@ -42,7 +44,8 @@ void *memmove(void *d, const void *s, size_t n)
 
 int memcmp(const void *a, const void *b, size_t n)
 {
-    const unsigned char *p = a, *q = b;
+    const unsigned char *p = a;
+    const unsigned char *q = b;
     for (; n; n--, p++, q++)
         if (*p != *q) return *p < *q ? -1 : 1;
     return 0;
@@ -52,7 +55,7 @@ void *memchr(const void *s, int c, size_t n)
 {
     const unsigned char *p = s;
     for (; n; n--, p++)
-        if (*p == (unsigned char)c) return (void *)p;
+        if (*p == (unsigned char)c) return (void *)p;   /* NOSONAR: ISO C's memchr returns void * */
     return NULL;
 }
 
@@ -66,7 +69,7 @@ size_t strlen(const char *s)
 char *strchr(const char *s, int c)
 {
     for (;; s++) {
-        if (*s == (char)c) return (char *)s;
+        if (*s == (char)c) return (char *)s;    /* NOSONAR: ISO C's strchr returns char * */
         if (!*s) return NULL;
     }
 }

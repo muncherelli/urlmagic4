@@ -19,17 +19,19 @@ static void site_key(WCHAR *out, const WCHAR *service, DWORD instance)
 
 static int lookup(const WCHAR *v, const WCHAR **names, int n, int dflt)
 {
-    int i;
-    for (i = 0; i < n; i++)
+    for (int i = 0; i < n; i++)
         if (lstrcmpiW(v, names[i]) == 0) return i;
     return dflt;
 }
 
 LONG um_site_read(HKEY hklm, const WCHAR *service, DWORD instance, um_site *s)
 {
-    WCHAR path[200], buf[MAX_PATH];
+    WCHAR path[200];
+    WCHAR buf[MAX_PATH];
     HKEY k;
-    DWORD type, size, dw;
+    DWORD type;
+    DWORD size;
+    DWORD dw;
     LONG r;
 
     um_site_defaults(s);
@@ -77,7 +79,8 @@ LONG um_site_write(HKEY hklm, const WCHAR *service, DWORD instance, const um_sit
 {
     WCHAR path[200];
     HKEY k;
-    DWORD disp, dw = s->enabled ? 1 : 0;
+    DWORD disp;
+    DWORD dw = s->enabled ? 1 : 0;
     LONG r;
 
     site_key(path, service, instance);
