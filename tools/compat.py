@@ -14,6 +14,7 @@ import argparse
 import http.client
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tests", "compat"))
@@ -22,8 +23,15 @@ from cases import CASES, httpd_ini  # noqa: E402
 ORACLE = os.path.join(os.path.dirname(__file__), "..", "tests", "compat", "oracle.json")
 
 
+def check_host(host):
+    """HOST must be a bare host name or IPv4 address: no scheme, port or path."""
+    if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?", host):
+        sys.exit(f"not a host name or address: {host!r}")
+    return host
+
+
 def fetch(host, site, r):
-    conn = http.client.HTTPConnection(host, 80, timeout=20)
+    conn = http.client.HTTPConnection(host, 80, timeout=20)  # NOSONAR: dev tool, the operator's own IIS (check_host)
     headers = {"Host": site, "User-Agent": "urlmagic4-compat"}
     headers.update(r["headers"])
     body = "x=1" if r["method"] == "POST" else None
@@ -59,11 +67,12 @@ def main():
     elif a.cmd == "capture":
         if not a.host:
             sys.exit("capture needs the IIS server's address")
+        host = check_host(a.host)
         results = {}
         for cid, title, rules, reqs in CASES:
             results[cid] = {"title": title, "rules": rules, "requests": []}
             for r in reqs:
-                got = fetch(a.host, a.site, r)
+                got = fetch(host, a.site, r)
                 results[cid]["requests"].append({"request": r, "result": got})
                 print(f"{cid} {r['method']:4} {r['url']:28} -> {json.dumps(got)}")
         with open(ORACLE, "w") as f:

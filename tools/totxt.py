@@ -9,10 +9,10 @@ ASCII = {"→": "->", "←": "<-", "—": "--", "–": "-", "…": "...",
          "‘": "'", "’": "'", "“": '"', "”": '"', " ": " ",
          "•": "*", "·": "*", "™": "(TM)", "≥": ">=", "≤": "<="}
 
-text = open(sys.argv[1], encoding="utf-8").read().replace("\r\n", "\n")
+text = open(sys.argv[1], encoding="utf-8").read().replace("\r\n", "\n")  # NOSONAR: build step, the Makefile names the file
 text = "\n".join(l for l in text.split("\n") if not re.fullmatch(r"\s*<.*>\s*", l))
 text = text.lstrip("\n")
 for u, a in ASCII.items():
     text = text.replace(u, a)
-with open(sys.argv[2], "wb") as f:
+with open(sys.argv[2], "wb") as f:  # NOSONAR: build step, the Makefile names the file
     f.write(text.replace("\n", "\r\n").encode("cp1252", errors="replace"))
