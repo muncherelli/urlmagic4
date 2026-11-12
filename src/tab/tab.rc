@@ -36,7 +36,9 @@ STYLE WS_CHILD | WS_DISABLED | WS_CAPTION
 CAPTION "URL Magic"
 FONT 8, "MS Sans Serif"
 BEGIN
-    AUTOCHECKBOX    "&Enable URL rewriting for this site", IDC_ENABLED, 7, 7, 238, 10
+    AUTOCHECKBOX    "&Enable URL rewriting for this site", IDC_ENABLED, 7, 7, 140, 10
+    /* where it comes from, right-aligned beside the switch (stretched with the page) */
+    RTEXT           "github.com/muncherelli/urlmagic4", IDC_REPO, 150, 8, 95, 9
 
     GROUPBOX        "Rules format", IDC_FMT_GROUP, 7, 23, 238, 64
     AUTORADIOBUTTON "A&utomatic (by file name)", IDC_FMT_AUTO, 14, 35, 224, 10, WS_GROUP | WS_TABSTOP
@@ -53,12 +55,11 @@ BEGIN
 
     AUTOCHECKBOX    "&Debug: log every request and how long the rules took", IDC_DEBUG, 7, 165, 238, 10
 
-    LTEXT           "Changes take effect on the next request; no IIS restart needed. The log is urlmagic4.log in the urlmagic folder.", -1, 7, 179, 238, 18
+    LTEXT           "Changes take effect on the next request; no IIS restart needed. The log is urlmagic4.log in the urlmagic folder.", IDC_NOTE, 7, 179, 238, 18
 
     /* only shown if the settings couldn't be read */
     LTEXT           "", IDC_SITE, 7, 197, 238, 9, NOT WS_VISIBLE
 
-    /* out of the way along the bottom: where it comes from, and which version */
-    LTEXT           "github.com/muncherelli/urlmagic4", -1, 7, 207, 160, 9
+    /* out of the way in the bottom corner: which version */
     RTEXT           "", IDC_VERSION, 170, 207, 75, 9
 END

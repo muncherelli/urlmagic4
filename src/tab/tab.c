@@ -129,6 +129,7 @@ typedef struct {
     um_site site;
     LONG load_error;
     BOOL loading;           /* ignore control notifications while filling the page */
+    int width;              /* client width the controls are laid out for (0 until WM_INITDIALOG) */
 } page_state;
 
 static BOOL read_node(IDataObject *dobj, page_state *ps)
@@ -259,6 +260,36 @@ static BOOL read_page(HWND dlg, page_state *ps)
     return TRUE;
 }
 
+/* The property sheet makes every page as big as its largest one, and IIS's own pages are wider
+   than this template: stretch the full-width controls and keep the right-hand ones at the edge. */
+static void fit_width(HWND dlg, page_state *ps, int width)
+{
+    static const int stretch[] = { IDC_FMT_GROUP, IDC_FMT_AUTO, IDC_FMT_HTACCESS, IDC_FMT_HTTPDINI,
+                                   IDC_FMT_NGINX, IDC_SRC_GROUP, IDC_SRC_DOCROOT, IDC_SRC_FILE,
+                                   IDC_FILE, IDC_DEBUG, IDC_NOTE, IDC_SITE, IDC_REPO, 0 };
+    static const int move[] = { IDC_BROWSE, IDC_VERSION, 0 };
+    int dx = width - ps->width, i;
+    RECT r;
+    HWND c;
+
+    if (dx == 0) return;
+    for (i = 0; stretch[i]; i++) {
+        c = GetDlgItem(dlg, stretch[i]);
+        GetWindowRect(c, &r);
+        MapWindowPoints(NULL, dlg, (POINT *)&r, 2);
+        SetWindowPos(c, NULL, 0, 0, r.right - r.left + dx, r.bottom - r.top,
+                     SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    for (i = 0; move[i]; i++) {
+        c = GetDlgItem(dlg, move[i]);
+        GetWindowRect(c, &r);
+        MapWindowPoints(NULL, dlg, (POINT *)&r, 2);
+        SetWindowPos(c, NULL, r.left + dx, r.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    ps->width = width;
+    InvalidateRect(dlg, NULL, TRUE);
+}
+
 static INT_PTR CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 {
     page_state *ps = (page_state *)GetWindowLongPtrW(dlg, DWLP_USER);
@@ -267,8 +298,17 @@ static INT_PTR CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
     case WM_INITDIALOG:
         ps = (page_state *)((PROPSHEETPAGEW *)lp)->lParam;
         SetWindowLongPtrW(dlg, DWLP_USER, (LONG_PTR)ps);
+        {
+            RECT r;
+            GetClientRect(dlg, &r);
+            ps->width = r.right;
+        }
         fill_page(dlg, ps);
         return TRUE;
+
+    case WM_SIZE:
+        if (ps && ps->width && LOWORD(lp) > 0) fit_width(dlg, ps, LOWORD(lp));
+        break;
 
     case WM_COMMAND:
         if (!ps || ps->loading) break;
