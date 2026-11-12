@@ -15,3 +15,5 @@
 #define IDC_DEBUG       112
 #define IDC_FMT_NGINX   113
 #define IDC_VERSION     114
+#define IDC_NOTE        115
+#define IDC_REPO        116
