@@ -829,6 +829,75 @@ static void arp_register(const WCHAR *dir)
     RegCloseKey(k);
 }
 
+/* ---------------------------------------------------------------- permissions */
+
+/* NT 4.0 gives Everyone full control of C:\ and lets Everyone write under HKLM\SOFTWARE, and
+   new folders and keys take that on. Anyone who can run code on the server (a web site's own
+   account, say) could then swap urlmagic4.dll, which IIS loads as SYSTEM, or turn a site's
+   rewriting on and point it at any file. So what setup makes gets its own permissions:
+   Administrators and SYSTEM may change it, everyone else may only read it. */
+enum { LOCK_FILE, LOCK_DIR, LOCK_KEY };
+
+static BOOL lock_sd(int kind, DWORD *aclbuf, DWORD size, SECURITY_DESCRIPTOR *sd)
+{
+    SID_IDENTIFIER_AUTHORITY nt = {SECURITY_NT_AUTHORITY}, world = {SECURITY_WORLD_SID_AUTHORITY};
+    PSID admins = NULL, sys = NULL, everyone = NULL;
+    PACL acl = (PACL)aclbuf;
+    DWORD full = kind == LOCK_KEY ? KEY_ALL_ACCESS : FILE_ALL_ACCESS;
+    DWORD read = kind == LOCK_KEY ? KEY_READ : FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
+    BYTE inherit = kind == LOCK_DIR ? OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE :
+                   kind == LOCK_KEY ? CONTAINER_INHERIT_ACE : 0;
+    BOOL ok = AllocateAndInitializeSid(&nt, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS,
+                                       0, 0, 0, 0, 0, 0, &admins) &&
+              AllocateAndInitializeSid(&nt, 1, SECURITY_LOCAL_SYSTEM_RID, 0, 0, 0, 0, 0, 0, 0, &sys) &&
+              AllocateAndInitializeSid(&world, 1, SECURITY_WORLD_RID, 0, 0, 0, 0, 0, 0, 0, &everyone) &&
+              InitializeAcl(acl, size, ACL_REVISION) &&
+              AddAccessAllowedAce(acl, ACL_REVISION, full, admins) &&
+              AddAccessAllowedAce(acl, ACL_REVISION, full, sys) &&
+              AddAccessAllowedAce(acl, ACL_REVISION, read, everyone) &&
+              InitializeSecurityDescriptor(sd, SECURITY_DESCRIPTOR_REVISION) &&
+              SetSecurityDescriptorDacl(sd, TRUE, acl, FALSE);
+    if (ok && inherit) {
+        /* NT 4.0 has no AddAccessAllowedAceEx: set the inheritance flags afterwards */
+        DWORD i;
+        ACE_HEADER *h;
+        for (i = 0; i < acl->AceCount; i++)
+            if (GetAce(acl, i, (LPVOID *)&h)) h->AceFlags = inherit;
+    }
+    if (admins) FreeSid(admins);
+    if (sys) FreeSid(sys);
+    if (everyone) FreeSid(everyone);
+    return ok;
+}
+
+/* a file or folder of ours: LOCK_FILE or LOCK_DIR */
+static BOOL lock_path(const WCHAR *path, int kind)
+{
+    DWORD aclbuf[64];
+    SECURITY_DESCRIPTOR sd;
+    return lock_sd(kind, aclbuf, sizeof aclbuf, &sd) &&
+           SetFileSecurityW(path, DACL_SECURITY_INFORMATION, &sd);
+}
+
+/* a registry key of ours, and every key under it */
+static void lock_key(HKEY root, const WCHAR *path)
+{
+    DWORD aclbuf[64];
+    SECURITY_DESCRIPTOR sd;
+    WCHAR sub[256], full[600];
+    HKEY k;
+    DWORD i, n;
+    if (!lock_sd(LOCK_KEY, aclbuf, sizeof aclbuf, &sd)) return;
+    if (RegOpenKeyExW(root, path, 0, WRITE_DAC | KEY_ENUMERATE_SUB_KEYS, &k) != ERROR_SUCCESS) return;
+    RegSetKeySecurity(k, DACL_SECURITY_INFORMATION, &sd);
+    for (i = 0; n = 256, RegEnumKeyExW(k, i, sub, &n, NULL, NULL, NULL, NULL) == ERROR_SUCCESS; i++) {
+        if (lstrlenW(path) + lstrlenW(sub) + 2 > 600) continue;
+        wsprintfW(full, L"%s\\%s", path, sub);
+        lock_key(root, full);
+    }
+    RegCloseKey(k);
+}
+
 static void record_dir(const WCHAR *dir)
 {
     HKEY k;
@@ -840,6 +909,9 @@ static void record_dir(const WCHAR *dir)
         RegCloseKey(k);
     }
     arp_register(dir);
+    /* the sites' settings live under this key too (the tab's new keys take these permissions on) */
+    lock_key(HKEY_LOCAL_MACHINE, UM_REG_ROOT);
+    lock_key(HKEY_LOCAL_MACHINE, ARP_KEY);
 }
 
 /* ---------------------------------------------------------------- talking to the user */
@@ -955,8 +1027,9 @@ static DWORD extract(int id, const WCHAR *path)
 
 static int install(const WCHAR *dir)
 {
+    static const WCHAR *LOGS[] = { L"urlmagic4.log", L"urlmagic4.log.old", NULL };
     WCHAR src[MAX_PATH], from[MAX_PATH], to[MAX_PATH];
-    BOOL running = FALSE;
+    BOOL running = FALSE, ours, locked = FALSE;
     int i;
 
     dir_of_exe(src);
@@ -973,7 +1046,13 @@ static int install(const WCHAR *dir)
     ok();
 
     step("Unpacking files");
-    CreateDirectoryW(dir, NULL);
+    {
+        /* a folder we made (now or at an earlier install) gets our permissions; one that was
+           already there for something else keeps its own */
+        WCHAR was[MAX_PATH];
+        ours = CreateDirectoryW(dir, NULL) || (installed_dir(was) && lstrcmpiW(was, dir) == 0);
+        if (ours) locked = lock_path(dir, LOCK_DIR);
+    }
     for (i = 0; FILES[i]; i++) {
         DWORD e;
         int tries;
@@ -1000,7 +1079,13 @@ static int install(const WCHAR *dir)
     join(from, src, g_self);
     join(to, dir, g_self);
     if (lstrcmpiW(from, to) != 0) CopyFileW(from, to, FALSE);
+    /* rewritten files keep the permissions they had, so set them on each file too */
+    lock_path(to, LOCK_FILE);
+    for (i = 0; FILES[i]; i++) { join(to, dir, FILES[i]); lock_path(to, LOCK_FILE); }
+    for (i = 0; LOGS[i]; i++) { join(to, dir, LOGS[i]); lock_path(to, LOCK_FILE); }
     ok();
+    if (!ours) note("The install folder's own permissions were left as they were: make sure only administrators can change files in it.");
+    else if (!locked) note("Couldn't restrict who may change the install folder (a FAT drive?): only administrators should be able to.");
     record_dir(dir);
 
     step("Registering the URL Magic tab");
