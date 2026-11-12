@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.1.1](https://github.com/muncherelli/urlmagic4/compare/v4.1.0...v4.1.1) (2026-11-12)
+
+
+### Bug Fixes
+
+* security hardening of the filter, engine and setup ([#13](https://github.com/muncherelli/urlmagic4/issues/13)) ([c8e6a72](https://github.com/muncherelli/urlmagic4/commit/c8e6a72ad0340c7be3c70ac51fd588865c9d80cd))
+* **tab:** fill the property sheet's width; repo link beside the switch ([#11](https://github.com/muncherelli/urlmagic4/issues/11)) ([7db96db](https://github.com/muncherelli/urlmagic4/commit/7db96db4ff016da55f5236058b96f25c7caeaa77))
+
 ## [4.1.0](https://github.com/muncherelli/urlmagic4/compare/v4.0.0...v4.1.0) (2026-11-11)
 
 
