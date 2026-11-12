@@ -33,7 +33,7 @@ typedef void (*um_log_fn)(void *ctx, int line, const char *msg);
 typedef struct um_rules um_rules;
 
 typedef struct {
-    int action;     /* UM_* */
+    int action;     /* one of the UM_ values above */
     int status;     /* HTTP status for UM_REDIRECT (301, 302, 303, 307) */
     char *url;      /* new URL ("/path?query") for UM_REWRITE, Location for UM_REDIRECT */
     int line;       /* rules-file line of the last rule that matched; 0 = none */
