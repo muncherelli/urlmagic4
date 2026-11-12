@@ -31,7 +31,8 @@ def check_host(host):
 
 
 def fetch(host, site, r):
-    conn = http.client.HTTPConnection(host, 80, timeout=20)  # NOSONAR: dev tool, the operator's own IIS (check_host)
+    # a dev tool aimed at the operator's own test IIS server (HOST passed check_host)
+    conn = http.client.HTTPConnection(host, 80, timeout=20)  # NOSONAR
     headers = {"Host": site, "User-Agent": "urlmagic4-compat"}
     headers.update(r["headers"])
     body = "x=1" if r["method"] == "POST" else None
