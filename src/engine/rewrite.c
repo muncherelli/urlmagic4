@@ -1343,7 +1343,7 @@ static int redirect_to_url(state *st, const rule *ru, const char *s, um_result *
 }
 
 /* cut s at its "?": the query after it, or NULL if there is none */
-static char *cut_query(char *s)
+static char *cut_query(char *s)    /* NOSONAR: writes the cut into s */
 {
     char *q = strchr(s, '?');
     if (q) { *q = 0; q++; }
