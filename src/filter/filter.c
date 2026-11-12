@@ -534,10 +534,13 @@ static char header_var_char(char c)
 static const char *http_header(const request *rq, const char *name, char *buf, size_t cap)
 {
     char tmp[200];
-    size_t j = 5;
+    size_t i = 5;                   /* "HTTP:" and "HTTP_" are the same length */
     cpy(tmp, "HTTP_", sizeof tmp);
-    for (const char *p = name + 5; *p && j + 1 < sizeof tmp; p++) tmp[j++] = header_var_char(*p);
-    tmp[j] = 0;
+    while (name[i] && i + 1 < sizeof tmp) {
+        tmp[i] = header_var_char(name[i]);
+        i++;
+    }
+    tmp[i] = 0;
     return server_var(rq, tmp, buf, cap);
 }
 
@@ -609,7 +612,7 @@ static BOOL has_header(HTTP_FILTER_CONTEXT *pfc, const HTTP_FILTER_PREPROC_HEADE
 /* Send a whole small response in one piece (headers and body together: two small sends can
    stall on Nagle + delayed ACK). GET and HEAD over HTTP/1.1 without a body keep the
    connection open, so a proxy in front can reuse it. */
-static DWORD respond(HTTP_FILTER_CONTEXT *pfc, HTTP_FILTER_PREPROC_HEADERS *hdr,
+static DWORD respond(HTTP_FILTER_CONTEXT *pfc, const HTTP_FILTER_PREPROC_HEADERS *hdr,
                      const char *status, const char *location)
 {
     char buf[URL_CAP + 700];
