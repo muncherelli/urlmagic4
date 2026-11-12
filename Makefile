@@ -139,12 +139,16 @@ $(B)/test_engine_nofast: tests/test_engine.c src/engine/rewrite.c src/engine/rew
 # the fast path against PCRE2, pattern by pattern
 $(B)/test_fastpath: tests/test_fastpath.c src/engine/rewrite.c src/engine/rewrite.h $(PCRE2_SRC) | $(B)
 	$(HOSTCC) $(TEST_FLAGS) -fsanitize=address,undefined -o $@ tests/test_fastpath.c $(PCRE2_SRC)
+# a scratch lets go of PCRE2's memory after a heavy request
+$(B)/test_scratch: tests/test_scratch.c src/engine/rewrite.c src/engine/rewrite.h $(PCRE2_SRC) | $(B)
+	$(HOSTCC) $(TEST_FLAGS) -fsanitize=address,undefined -o $@ tests/test_scratch.c $(PCRE2_SRC)
 
-test: $(B)/test_engine $(B)/test_engine_exact $(B)/test_engine_nofast $(B)/test_fastpath
+test: $(B)/test_engine $(B)/test_engine_exact $(B)/test_engine_nofast $(B)/test_fastpath $(B)/test_scratch
 	$(B)/test_engine
 	$(B)/test_engine_exact
 	$(B)/test_engine_nofast
 	$(B)/test_fastpath
+	$(B)/test_scratch
 
 install: all
 	rm -f $(DEST)/setup.exe $(DEST)/urlmagic4-v*.exe $(DEST)/urlmagic[0-9]*.exe

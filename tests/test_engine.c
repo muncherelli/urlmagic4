@@ -16,6 +16,8 @@ static const char *var(void *ctx, const char *name, const char *path, char *buf,
     (void)ctx;
     if (strcmp(name, "HTTP_HOST") == 0) return "dev.muncherelli.com";
     if (strcmp(name, "HTTP:User-Agent") == 0) return "Mozilla/4.0 (compatible; MSIE 4.01; Windows NT)";
+    if (strcmp(name, "HTTP:X-Evil") == 0) return "a\r\nb";
+    if (strcmp(name, "HTTP:X-Back") == 0) return "\\evil.example";
     if (strcmp(name, "REQUEST_FILENAME") == 0) {
         snprintf(buf, cap, "/site%s", path);
         return buf;
@@ -210,6 +212,76 @@ int main(void)
     /* a %00 ends the path for every rule (it can't be used to slip past a deny rule) */
     check("%00 in the path", "RewriteEngine On\nRewriteRule \\.cfm$ - [F]\n", "/x.cfm%00.jpg",
           UM_FORBIDDEN, 403, NULL);
+
+    /* the path is tidied before the rules see it, the way IIS will map it: "..", "." and double
+       slashes can't be used to get past a rule */
+    {
+        static const char *DENY = "RewriteEngine On\nRewriteRule ^admin - [F]\n";
+        static const char *SNEAKY[] = {
+            "/x/../admin", "//admin", "/./admin", "/%2e%2e/admin", "/x/%2E%2E/admin", "/../../admin",
+            "/%5cadmin", "/x%5c..%5cadmin", "/x/..\\admin", "/x/y/../../admin/", NULL
+        };
+        int i;
+        for (i = 0; SNEAKY[i]; i++) check(SNEAKY[i], DENY, SNEAKY[i], UM_FORBIDDEN, 403, NULL);
+    }
+    check("clean path: kept trailing slash", FRONT, "/about/./team/", UM_REWRITE, 0, "/index.cfm?page=about/team/");
+    check("clean path: .. ending a path", FRONT, "/about/team/..", UM_REWRITE, 0, "/index.cfm?page=about/");
+    check("clean path: above the root stays at the root", "RewriteEngine On\nRewriteRule ^$ /home [L]\n",
+          "/../..", UM_REWRITE, 0, "/home");
+    check("clean path: REQUEST_URI", "RewriteEngine On\nRewriteRule ^b$ /c?u=%{REQUEST_URI} [L]\n",
+          "/a/../b", UM_REWRITE, 0, "/c?u=/b");
+    check("clean path: dots inside names stay", FRONT, "/a..b/.c/c.", UM_REWRITE, 0, "/index.cfm?page=a..b/.c/c.");
+
+    /* a redirect never names another host by accident (a path after two slashes is one) */
+    check("redirect: //host from the trailing-slash rule", "RewriteEngine On\nRewriteRule ^(.*)/$ /$1 [R=301,L]\n",
+          "//evil.example/", UM_REDIRECT, 301, "/evil.example");
+    check("redirect: //host from a capture", "RewriteEngine On\nRewriteRule ^x(.*)$ /$1 [R,L]\n",
+          "/x/evil.example", UM_REDIRECT, 302, "/evil.example");
+    check("redirect: /\\host from a capture", "RewriteEngine On\nRewriteRule ^x(.*)$ /$1 [R,NE,L]\n",
+          "/x%5cevil.example", UM_REDIRECT, 302, "/evil.example");
+    check("redirect: Redirect prefix and //", "Redirect /old /\n", "/old//evil.example", UM_REDIRECT, 302,
+          "/evil.example");
+    check("redirect: RedirectMatch to //", "RedirectMatch ^/x(.*)$ /$1\n", "/x/evil.example", UM_REDIRECT, 302,
+          "/evil.example");
+
+    /* CR and LF never reach the Location header, [NE] or not */
+    check("NE: no CRLF in the Location", "RewriteEngine On\nRewriteRule ^go/([^/]*)$ /y?q=$1 [R,NE,L]\n",
+          "/go/a%0d%0aSet-Cookie:x=1", UM_REDIRECT, 302, "/y?q=a%0D%0ASet-Cookie:x=1");
+    check("NE: no CRLF in an absolute Location", "RewriteEngine On\nRewriteRule ^go/([^/]*)$ http://example.com/$1 [NE,L]\n",
+          "/go/a%0d%0aSet-Cookie:x=1", UM_REDIRECT, 302, "http://example.com/a%0D%0ASet-Cookie:x=1");
+    check("NE: no CRLF from a header", "RewriteEngine On\nRewriteCond %{HTTP:X-Evil} ([^z]+)\nRewriteRule ^a$ /b?%1 [R,NE,L]\n",
+          "/a", UM_REDIRECT, 302, "/b?a%0D%0Ab");
+    check("NE: the rest stays as written", "RewriteEngine On\nRewriteRule ^a$ /b?x=a+b&c=<d> [R,NE,L]\n",
+          "/a", UM_REDIRECT, 302, "/b?x=a+b&c=<d>");
+    check("redirect: \\host from a header", "RewriteEngine On\nRewriteCond %{HTTP:X-Back} (.+)\nRewriteRule ^a$ %1 [R,NE,L]\n",
+          "/a", UM_REDIRECT, 302, "/evil.example");
+
+    /* rules files are refused under every name Windows opens them by */
+    {
+        static char dots[200];
+        static const char *YES[] = {
+            "/httpd.htaccess", "/HTTPD.HTACCESS", "/sub/.htaccess", "/httpd.htaccess?x=1", "/%2ehtaccess",
+            "/x%5chttpd.ini", "/x\\httpd.ini", "/httpd.htaccess.", "/httpd.htaccess%20", "/httpd.htaccess::$DATA",
+            "/httpd.htaccess:x", "/httpd.htaccess%00.jpg", "/httpd.htaccess/", "/HTTPD~1.HTA", "/httpd~12.hta",
+            "/HTACCE~1", "/HTF3A1~1.HTA", "/NGINX~1.CON", "/URLMAG~1.CON", "/HTTPDP~1.ERR", "/nginx.conf",
+            "/urlmagic4.conf", "/httpd.parse.errors", dots, NULL
+        };
+        static const char *NO[] = {
+            "/", "/index.cfm", "/httpd.htaccess.txt", "/htaccess", "/HTMLFI~1", "/x?f=httpd.htaccess",
+            "/PROGRA~1", "/HTTPD~1.HTM", "/httpd~x.hta", "/httpd~1", "/a.htaccess", "/%zz", "", NULL
+        };
+        int i;
+        memcpy(dots, "/httpd.htaccess", 15);         /* and 150 dots, which Windows drops */
+        memset(dots + 15, '.', 150);
+        for (i = 0; YES[i]; i++) {
+            if (um_is_rules_file(YES[i])) passed++;
+            else { failures++; printf("FAIL rules file not refused: %s\n", YES[i]); }
+        }
+        for (i = 0; NO[i]; i++) {
+            if (!um_is_rules_file(NO[i])) passed++;
+            else { failures++; printf("FAIL refused as a rules file: %s\n", NO[i]); }
+        }
+    }
 
     /* bigger than the scratch's block: overflow chunks */
     {

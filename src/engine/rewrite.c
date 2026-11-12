@@ -664,6 +664,7 @@ um_rules *um_parse(const char *text, size_t len, int dialect, um_log_fn log, voi
 #define CHUNK_MIN     4096
 #endif
 #define STRING_MAX    (16u * 1024 * 1024)
+#define FRAMES_KEEP   (256u * 1024)     /* PCRE2 backtracking memory a scratch may keep */
 
 typedef struct chunk { struct chunk *next; } chunk;
 
@@ -699,6 +700,15 @@ static void scratch_reset(um_scratch *a)
     a->cur = a->block;
     a->left = sizeof a->block;
     a->oom = 0;
+    /* PCRE2 keeps its backtracking memory in the match data; after a request that needed a
+       lot (up to HEAP_LIMIT), let it go rather than hold it for the life of the thread */
+    if (pcre2_get_match_data_heapframes_size(a->md) > FRAMES_KEEP) {
+        pcre2_match_data *md = pcre2_match_data_create(MAX_CAPS, NULL);
+        if (md) {
+            pcre2_match_data_free(a->md);
+            a->md = md;
+        }
+    }
 }
 
 void um_scratch_free(um_scratch *a)
@@ -793,7 +803,43 @@ static void a_rollback(um_scratch *a, amark m)
     if (a->extra == m.extra && !a->oom) { a->cur = m.cur; a->left = m.left; }
 }
 
-/* %XX -> byte ("+" stays "+"); a %00 ends the string, so the rules never see past it */
+/* Tidy a decoded path in place, as Apache does before per-directory rules and as IIS does
+   before it maps the URL to a file: "\" is a "/", runs of "/" become one, "." segments go and
+   ".." takes away the segment before it (never above the root). Otherwise "/x/../admin", or
+   admin after a double slash, would slip past a rule for ^admin and still be served as /admin.
+   A path that doesn't start with "/" (e.g. "*") is left alone. Returns the new length. */
+static size_t clean_path(char *s, size_t n)
+{
+    size_t i = 0, o = 0;
+    int dir = 1;                /* the path ends in a folder (keep a trailing "/") */
+    if (!n || s[0] != '/') return n;
+    while (i < n) {
+        size_t start, len;
+        if (s[i] == '/' || s[i] == '\\') { i++; dir = 1; continue; }
+        start = i;
+        while (i < n && s[i] != '/' && s[i] != '\\') i++;
+        len = i - start;
+        if (len == 1 && s[start] == '.') {
+            dir = 1;
+        } else if (len == 2 && s[start] == '.' && s[start + 1] == '.') {
+            while (o > 0 && s[o - 1] != '/') o--;
+            if (o > 0) o--;
+            dir = 1;
+        } else {
+            /* o < start: every segment read so far came with at least one separator */
+            s[o++] = '/';
+            memmove(s + o, s + start, len);
+            o += len;
+            dir = 0;
+        }
+    }
+    if (dir && (o == 0 || s[o - 1] != '/')) s[o++] = '/';
+    s[o] = 0;
+    return o;
+}
+
+/* %XX -> byte ("+" stays "+"); a %00 ends the string, so the rules never see past it. The
+   result is then tidied (clean_path). */
 static char *url_decode(um_scratch *a, const char *s, size_t n, size_t *len)
 {
     abuf b;
@@ -815,6 +861,7 @@ static char *url_decode(um_scratch *a, const char *s, size_t n, size_t *len)
             b.s[b.len++] = s[i];
         }
     }
+    b.len = clean_path(b.s, b.len);
     return ab_close(&b, len);
 }
 
@@ -833,12 +880,21 @@ static int needs_escape(const char *s)
     }
 }
 
-static void ab_add_escaped(abuf *b, const char *s)
+/* s[0] is a control character: never sent raw, [NE] or not (a CR or LF in a Location header
+   would let a request add headers of its own) */
+static int is_ctl(const char *s)
+{
+    unsigned char c = (unsigned char)*s;
+    return c < 0x20 || c == 0x7f;
+}
+
+/* append s, %-escaping the characters test picks */
+static void ab_add_esc(abuf *b, const char *s, int (*test)(const char *))
 {
     static const char hex[] = "0123456789ABCDEF";
     while (*s) {
         const char *run = s;
-        while (*s && !needs_escape(s)) s++;
+        while (*s && !test(s)) s++;
         ab_addn(b, run, (size_t)(s - run));
         if (*s) {
             unsigned char c = (unsigned char)*s++;
@@ -850,6 +906,11 @@ static void ab_add_escaped(abuf *b, const char *s)
         }
     }
 }
+
+static void ab_add_escaped(abuf *b, const char *s) { ab_add_esc(b, s, needs_escape); }
+
+/* [NE]: as written, except control characters */
+static void ab_add_raw(abuf *b, const char *s) { ab_add_esc(b, s, is_ctl); }
 
 /* ---------------------------------------------------------------- applying */
 
@@ -1047,15 +1108,30 @@ static void finish(um_result *out, int action, int status, char *url)
     out->url = url;
 }
 
-/* path (decoded, leading "/") + query -> escaped URL */
-static char *build_url(state *st, const char *path, const char *query, int noescape)
+/* a full URL, %-escaped ([NE]: only its control characters) */
+static char *escape_url(state *st, const char *u, int noescape)
 {
     abuf b;
     ab_open(&b, st->a);
-    if (noescape) ab_add(&b, path); else ab_add_escaped(&b, path);
+    if (noescape) ab_add_raw(&b, u); else ab_add_escaped(&b, u);
+    return ab_close(&b, NULL);
+}
+
+/* path (decoded, leading "/") + query -> escaped URL. For a redirect, a path that starts with
+   two slashes (or a slash and a backslash) would send the browser to another host, so the
+   extra ones go. */
+static char *build_url(state *st, const char *path, const char *query, int noescape, int redirect)
+{
+    abuf b;
+    ab_open(&b, st->a);
+    if (redirect && (path[0] == '/' || path[0] == '\\')) {
+        while (path[1] == '/' || path[1] == '\\') path++;
+        if (*path == '\\') { ab_addc(&b, '/'); path++; }
+    }
+    if (noescape) ab_add_raw(&b, path); else ab_add_escaped(&b, path);
     if (query && *query) {
         ab_addc(&b, '?');
-        if (noescape) ab_add(&b, query); else ab_add_escaped(&b, query);
+        if (noescape) ab_add_raw(&b, query); else ab_add_escaped(&b, query);
     }
     return ab_close(&b, NULL);
 }
@@ -1100,7 +1176,7 @@ int um_apply_s(const um_rules *r, const char *url, const um_env *env, um_scratch
                 if (ru->status == 410) { finish(out, UM_GONE, 410, NULL); goto done; }
                 u = concat(&st, ru->subst, st.path + n, "");
                 if (!u) { st.failed = 1; goto done; }
-                finish(out, UM_REDIRECT, ru->status, build_url(&st, u, st.query, 0));
+                finish(out, UM_REDIRECT, ru->status, build_url(&st, u, st.query, 0, 1));
                 goto done;
             }
             continue;
@@ -1114,7 +1190,7 @@ int um_apply_s(const um_rules *r, const char *url, const um_env *env, um_scratch
                 if (ru->status == 410) { finish(out, UM_GONE, 410, NULL); goto done; }
                 u = expand(&st, ru->ts, &rc, NULL, NULL);
                 if (!u) { st.failed = 1; goto done; }
-                finish(out, UM_REDIRECT, ru->status, build_url(&st, u, NULL, 0));
+                finish(out, UM_REDIRECT, ru->status, build_url(&st, u, NULL, 0, 1));
                 goto done;
             }
             continue;
@@ -1160,13 +1236,7 @@ int um_apply_s(const um_rules *r, const char *url, const um_env *env, um_scratch
                     u = concat(&st, s, "?", st.query);
                     if (!u) { st.failed = 1; goto done; }
                 }
-                if (!(ru->flags & F_NE)) {
-                    abuf b;
-                    ab_open(&b, a);
-                    ab_add_escaped(&b, u);
-                    u = ab_close(&b, NULL);
-                }
-                finish(out, UM_REDIRECT, status, u);
+                finish(out, UM_REDIRECT, status, escape_url(&st, u, ru->flags & F_NE));
                 goto done;
             }
             /* split the substitution into path and query (s is ours to change) */
@@ -1184,7 +1254,7 @@ int um_apply_s(const um_rules *r, const char *url, const um_env *env, um_scratch
             changed = 1;
 
             if (ru->flags & F_R) {
-                finish(out, UM_REDIRECT, ru->status, build_url(&st, st.path, st.query, ru->flags & F_NE));
+                finish(out, UM_REDIRECT, ru->status, build_url(&st, st.path, st.query, ru->flags & F_NE, 1));
                 goto done;
             }
         } else if (ru->flags & F_QSD) {
@@ -1195,7 +1265,7 @@ int um_apply_s(const um_rules *r, const char *url, const um_env *env, um_scratch
         if (ru->flags & (F_L | F_END)) break;
     }
 
-    if (changed) finish(out, UM_REWRITE, 0, build_url(&st, st.path, st.query, 0));
+    if (changed) finish(out, UM_REWRITE, 0, build_url(&st, st.path, st.query, 0, 0));
 
 done:
     out->line = applied;
@@ -1225,4 +1295,104 @@ void um_result_free(um_result *res)
 {
     free(res->url);
     res->url = NULL;
+}
+
+/* ---------------------------------------------------------------- rules files */
+
+static const char *const RULES_FILES[] = {
+    ".htaccess", "httpd.htaccess", "httpd.ini", "httpd.parse.errors", "nginx.conf",
+    "urlmagic4.conf", NULL
+};
+
+/* The part of an 8.3 alias before its "~" (pre bytes) fits the long name's base: its start,
+   or (the hashed form) its first two letters and four hex digits. */
+static int alias_prefix(const char *seg, size_t pre, const char *base, size_t bl)
+{
+    size_t i;
+    if (pre < 1 || pre > 6) return 0;
+    if (pre <= bl && memcmp(seg, base, pre) == 0 && (pre >= 2 || pre == bl)) return 1;
+    if (pre != 6 || bl < 2 || memcmp(seg, base, 2) != 0) return 0;
+    for (i = 2; i < 6; i++)
+        if (hexval((unsigned char)seg[i]) < 0) return 0;
+    return 1;
+}
+
+/* The part after the "~" (p up to end) is digits, then the first three letters of ext (the
+   long name's extension with its dot; NULL if none). */
+static int alias_tail(const char *p, const char *end, const char *ext)
+{
+    size_t i;
+    if (p == end || *p < '0' || *p > '9') return 0;
+    while (p < end && *p >= '0' && *p <= '9') p++;
+    if (!ext) return p == end;
+    if (p == end || *p != '.') return 0;
+    p++;
+    for (i = 0; i < 3 && ext[1 + i]; i++)
+        if (p + i >= end || p[i] != ext[1 + i]) return 0;
+    return p + i == end;
+}
+
+/* Is seg (lower case, n bytes) the DOS 8.3 alias Windows gives name, e.g. httpd~1.hta for
+   httpd.htaccess or htacce~1 for .htaccess? IIS opens a file by either name. */
+static int short_alias(const char *seg, size_t n, const char *name)
+{
+    const char *tilde = memchr(seg, '~', n), *ext = NULL, *p;
+    char base[16];
+    size_t bl = 0;
+
+    if (!tilde) return 0;
+    while (*name == '.') name++;
+    for (p = name; *p; p++)
+        if (*p == '.') ext = p;                 /* the last dot */
+    for (p = name; *p && p != ext && bl < sizeof base; p++)
+        if (*p != '.') base[bl++] = *p;
+    return alias_prefix(seg, (size_t)(tilde - seg), base, bl) && alias_tail(tilde + 1, seg + n, ext);
+}
+
+/* The last non-empty segment of url's path, %-decoded, in lower case, into seg (cap bytes);
+   its length, or -1 if it's longer than any rules file's name. A %00 ends the path. */
+static int last_segment(const char *url, char *seg, size_t cap)
+{
+    size_t j = 0;
+    int fresh = 1, over = 0;
+    const char *s = url;
+
+    for (; *s && *s != '?'; s++) {
+        int c = (unsigned char)*s;
+        if (c == '%' && hexval((unsigned char)s[1]) >= 0 && hexval((unsigned char)s[2]) >= 0) {
+            c = hexval((unsigned char)s[1]) * 16 + hexval((unsigned char)s[2]);
+            s += 2;
+        }
+        if (!c) break;
+        if (c == '/' || c == '\\') {
+            fresh = 1;
+        } else {
+            if (fresh) {
+                j = 0;
+                over = 0;
+                fresh = 0;
+            }
+            if (j + 1 < cap) seg[j++] = (char)lower(c);
+            else if (c != '.' && c != ' ') over = 1;    /* trailing dots and spaces don't count */
+        }
+    }
+    seg[j] = 0;
+    return over ? -1 : (int)j;
+}
+
+int um_is_rules_file(const char *url)
+{
+    char seg[64];
+    int n = last_segment(url, seg, sizeof seg), i;
+    const char *colon;
+
+    if (n < 0) return 0;
+    /* NTFS: "name::$DATA" and "name:stream" open name, and trailing dots and spaces go */
+    colon = memchr(seg, ':', (size_t)n);
+    if (colon) n = (int)(colon - seg);
+    while (n && (seg[n - 1] == '.' || seg[n - 1] == ' ')) n--;
+    seg[n] = 0;
+    for (i = 0; RULES_FILES[i]; i++)
+        if (strcmp(seg, RULES_FILES[i]) == 0 || short_alias(seg, (size_t)n, RULES_FILES[i])) return 1;
+    return 0;
 }
