@@ -4,7 +4,8 @@
 #include <string.h>
 #include "../src/engine/rewrite.h"
 
-static int failures, passed;
+static int failures;
+static int passed;
 static um_scratch *shared;      /* reused by every check, like one IIS thread's */
 
 /* a pretend web site: these paths exist under the docroot "/site" */
@@ -44,7 +45,7 @@ static void logline(void *ctx, int line, const char *msg)
 {
     int *count = ctx;
     (*count)++;
-    if (getenv("VERBOSE")) printf("    log: line %d: %s\n", line, msg);
+    if (getenv("VERBOSE")) printf("    log: line %d: %s\n", line, msg);   /* NOSONAR: native test on Linux, where getenv is not deprecated */
 }
 
 /* expect: action, then the URL (rewrite/redirect) or NULL */
@@ -221,8 +222,7 @@ int main(void)
             "/x/../admin", "//admin", "/./admin", "/%2e%2e/admin", "/x/%2E%2E/admin", "/../../admin",
             "/%5cadmin", "/x%5c..%5cadmin", "/x/..\\admin", "/x/y/../../admin/", NULL
         };
-        int i;
-        for (i = 0; SNEAKY[i]; i++) check(SNEAKY[i], DENY, SNEAKY[i], UM_FORBIDDEN, 403, NULL);
+        for (int i = 0; SNEAKY[i]; i++) check(SNEAKY[i], DENY, SNEAKY[i], UM_FORBIDDEN, 403, NULL);
     }
     check("clean path: kept trailing slash", FRONT, "/about/./team/", UM_REWRITE, 0, "/index.cfm?page=about/team/");
     check("clean path: .. ending a path", FRONT, "/about/team/..", UM_REWRITE, 0, "/index.cfm?page=about/");
@@ -285,7 +285,8 @@ int main(void)
 
     /* bigger than the scratch's block: overflow chunks */
     {
-        static char url[6000], want[6000 * 4];
+        static char url[6000];
+        static char want[6000 * 4];
         size_t i;
         url[0] = '/';
         for (i = 1; i < 5000; i++) url[i] = (char)('a' + i % 26);
@@ -300,9 +301,8 @@ int main(void)
     {
         static char rules[200000];
         size_t n = 0;
-        int i;
         n += (size_t)snprintf(rules + n, sizeof rules - n, "RewriteEngine On\n");
-        for (i = 0; i < 2000; i++)
+        for (int i = 0; i < 2000; i++)
             n += (size_t)snprintf(rules + n, sizeof rules - n,
                                   "RewriteCond %%{HTTP_HOST}/%%{REQUEST_URI} ^nope%d\nRewriteRule ^ - [F]\n", i);
         snprintf(rules + n, sizeof rules - n,
