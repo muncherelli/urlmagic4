@@ -1120,7 +1120,8 @@ static DWORD extract(int id, const WCHAR *path)
 static DWORD extract_retry(int id, const WCHAR *path)
 {
     DWORD e = extract(id, path);
-    for (int tries = 0; e == ERROR_SHARING_VIOLATION && tries < 120; tries++) {
+    for (int tries = 0; tries < 120; tries++) {
+        if (e != ERROR_SHARING_VIOLATION) break;
         spin_wait();
         e = extract(id, path);
     }
@@ -1720,45 +1721,58 @@ static int ask_purge(BOOL *purge)
     }
 }
 
+/* the system check: *problem is why setup can't go on, *advice a warning worth showing;
+   an installed urlmagic's folder goes in dir and d (OEM) */
+static void system_check(const sysinfo *si, BOOL remove, WCHAR *dir, char *d,
+                         const char **problem, const char **advice)
+{
+    put(STEP_X, CHECK_ROW, A_BRIGHT, "System check");
+    fill(STEP_X + 13, CHECK_ROW, ON_BLUE(C_DCYAN), (char)0xC4, TAG_X + 6 - (STEP_X + 13));
+    check_windows(si, problem, advice);
+    check_iis(si, problem, advice);
+    check_line(CHECK_ROW + 3, "Administrator", si->admin ? "Yes" : "No", si->admin ? OK_ : FAIL_);
+    if (!si->admin && !*problem) *problem = "Log on as an Administrator to install urlmagic.";
+    check_installed(si, dir, d);
+    if (remove && !si->installed && !*problem) *problem = "urlmagic isn't installed.";
+}
+
+/* what setup will do to the installed urlmagic (in folder d), and the keys */
+static void draw_action(const sysinfo *si, BOOL remove, const char *advice, const char *quit, const char *d)
+{
+    char v[MAX_PATH + 100];
+    char keys[100];
+    /* installed version vs this installer: <0 upgrade, 0 reinstall, >0 downgrade */
+    int cmp = vercmp(si->ver[0] ? si->ver : L"0", UM_VERSION_WSTR);
+
+    clear_rows(MSG_ROW, SCR_H - 2);
+    if (remove) wsprintfA(v, "Setup will remove urlmagic from %s.", d);
+    else action_text(v, si, cmp, d);
+    put(STEP_X, MSG_ROW, A_BRIGHT, v);
+    put(STEP_X, MSG_ROW + 1, ON_BLUE(C_YELLOW),
+        "Web sites go offline for a few seconds while the WWW service restarts.");
+    if (advice && !remove) put(STEP_X, MSG_ROW + 2, ON_BLUE(C_YELLOW), advice);
+
+    if (remove) wsprintfA(keys, "ENTER=Uninstall   %s", quit);
+    else wsprintfA(keys, "ENTER=%s   U=Uninstall   %s", cmp_word(cmp), quit);
+    keybar(keys);
+}
+
 /* the splash screen; returns 'i' (install into dir), 'u' (uninstall) or 'q' */
 static int splash(const sysinfo *si, BOOL *purge, BOOL remove, WCHAR *dir)
 {
-    char v[MAX_PATH + 100];
     char d[MAX_PATH];
-    char keys[100];
     const char *problem = NULL;
     const char *advice = NULL;
     const char *quit = remove ? "ESC/CTRL+C=Cancel" : "ESC/CTRL+C=Quit";
-    /* installed version vs this installer: <0 upgrade, 0 reinstall, >0 downgrade */
-    int cmp = 0;
-    if (si->installed) cmp = vercmp(si->ver[0] ? si->ver : L"0", UM_VERSION_WSTR);
 
     splash_logo();
-    put(STEP_X, CHECK_ROW, A_BRIGHT, "System check");
-    fill(STEP_X + 13, CHECK_ROW, ON_BLUE(C_DCYAN), (char)0xC4, TAG_X + 6 - (STEP_X + 13));
-    check_windows(si, &problem, &advice);
-    check_iis(si, &problem, &advice);
-    check_line(CHECK_ROW + 3, "Administrator", si->admin ? "Yes" : "No", si->admin ? OK_ : FAIL_);
-    if (!si->admin && !problem) problem = "Log on as an Administrator to install urlmagic.";
-    check_installed(si, dir, d);
-
-    if (remove && !si->installed && !problem) problem = "urlmagic isn't installed.";
+    system_check(si, remove, dir, d, &problem, &advice);
     if (problem) return splash_problem(problem);
     if (!si->installed && !remove) return ask_folder(advice, quit, dir);
 
     for (;;) {
         int k;
-        clear_rows(MSG_ROW, SCR_H - 2);
-        if (remove) wsprintfA(v, "Setup will remove urlmagic from %s.", d);
-        else action_text(v, si, cmp, d);
-        put(STEP_X, MSG_ROW, A_BRIGHT, v);
-        put(STEP_X, MSG_ROW + 1, ON_BLUE(C_YELLOW),
-            "Web sites go offline for a few seconds while the WWW service restarts.");
-        if (advice && !remove) put(STEP_X, MSG_ROW + 2, ON_BLUE(C_YELLOW), advice);
-
-        if (remove) wsprintfA(keys, "ENTER=Uninstall   %s", quit);
-        else wsprintfA(keys, "ENTER=%s   U=Uninstall   %s", cmp_word(cmp), quit);
-        keybar(keys);
+        draw_action(si, remove, advice, quit, d);
         k = key();
         if (k == 27 || k == 3) return 'q';
         if (k == 13 && !remove) return 'i';
