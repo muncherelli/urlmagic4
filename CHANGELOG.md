@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.3.0](https://github.com/muncherelli/urlmagic4/compare/v4.2.0...v4.3.0) (2026-11-23)
+
+
+### Features
+
+* **setup:** status and per-site settings for scripted management ([#21](https://github.com/muncherelli/urlmagic4/issues/21)) ([544d178](https://github.com/muncherelli/urlmagic4/commit/544d178cefa03464f33b9cb19d1235b7087f6f07))
+* **validate:** validate command, Linux validator, bin-only zip and validator release assets ([#22](https://github.com/muncherelli/urlmagic4/issues/22)) ([8282b7e](https://github.com/muncherelli/urlmagic4/commit/8282b7e2656ca8e027807751e60515d051f4be74))
+
 ## [4.2.0](https://github.com/muncherelli/urlmagic4/compare/v4.1.1...v4.2.0) (2026-11-23)
 
 
