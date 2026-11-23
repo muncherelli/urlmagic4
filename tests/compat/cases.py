@@ -109,7 +109,7 @@ CASES = [
 
     # --- conditions
     ("c40", "RewriteCond on a header", [
-        r"RewriteCond Host: dev\.muncherelli\.com",
+        r"RewriteCond Host: dev\.example\.com",
         r"RewriteRule /c40/(.*) /um-echo.cfm\?h=$1",
     ], [req("/c40/x")]),
     ("c41", "groups are numbered across conditions, then the rule", [

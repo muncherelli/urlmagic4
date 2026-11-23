@@ -15,7 +15,7 @@ static const char *DIRS[] = { "/site", "/site/assets", NULL };
 static const char *var(void *ctx, const char *name, const char *path, char *buf, size_t cap)
 {
     (void)ctx;
-    if (strcmp(name, "HTTP_HOST") == 0) return "dev.muncherelli.com";
+    if (strcmp(name, "HTTP_HOST") == 0) return "dev.example.com";
     if (strcmp(name, "HTTP:User-Agent") == 0) return "Mozilla/4.0 (compatible; MSIE 4.01; Windows NT)";
     if (strcmp(name, "HTTP:X-Evil") == 0) return "a\r\nb";
     if (strcmp(name, "HTTP:X-Back") == 0) return "\\evil.example";
@@ -204,7 +204,7 @@ int main(void)
           UM_REWRITE, 0, "/a%25%7BHTTP_HOST");
     check("subst: \\x is x", "RewriteEngine On\nRewriteRule ^a$ /a\\b [L]\n", "/a", UM_REWRITE, 0, "/ab");
     check("subst: variables", "RewriteEngine On\nRewriteRule ^a$ /%{HTTP_HOST}/%{NOPE}/x [L]\n", "/a",
-          UM_REWRITE, 0, "/dev.muncherelli.com//x");
+          UM_REWRITE, 0, "/dev.example.com//x");
     check("subst: REQUEST_URI and QUERY_STRING", "RewriteEngine On\nRewriteRule ^a$ /b?u=%{REQUEST_URI}&q=%{query_string} [L]\n",
           "/a?z=1", UM_REWRITE, 0, "/b?u=/a&q=z=1");
     check("subst: $1 then literal then %1", "RewriteEngine On\nRewriteCond %{HTTP_HOST} ^(dev)\nRewriteRule ^(a)$ /$1-x-%1 [L]\n",
