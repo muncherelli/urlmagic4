@@ -23,7 +23,7 @@ static void say(const char *s)
 static const char *var(void *ctx, const char *name, const char *path, char *buf, size_t cap)
 {
     (void)ctx;
-    if (name[0] == 'H' && name[5] == 'H') return "dev.muncherelli.com";             /* HTTP_HOST */
+    if (name[0] == 'H' && name[5] == 'H') return "dev.example.com";             /* HTTP_HOST */
     if (name[0] == 'R' && name[8] == 'F') {                                         /* REQUEST_FILENAME */
         lstrcpynA(buf, "C:", (int)cap);
         lstrcpynA(buf + 2, path, (int)cap - 2);
