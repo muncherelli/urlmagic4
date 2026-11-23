@@ -37,6 +37,23 @@ static void parse_log(void *ctx, int line, const char *msg)
     report((vstate *)ctx, line, msg);
 }
 
+/* is name (a path, either slash) a file called httpd.ini? The filter ignores those */
+static int is_httpd_ini(const char *name)
+{
+    static const char want[] = "httpd.ini";
+    const char *base = name;
+    const char *p;
+    int i;
+    for (p = name; *p; p++)
+        if (*p == '/' || *p == '\\') base = p + 1;
+    for (i = 0; want[i]; i++) {
+        char c = base[i];
+        if (c >= 'A' && c <= 'Z') c = (char)(c + 32);
+        if (c != want[i]) return 0;
+    }
+    return base[i] == 0;
+}
+
 int um_validate(const char *name, const char *text, size_t len, um_emit_fn emit, void *ctx, int *rules)
 {
     vstate v;
@@ -48,6 +65,10 @@ int um_validate(const char *name, const char *text, size_t len, um_emit_fn emit,
     *rules = 0;
     if (len > UM_MAX_RULES_FILE) {
         report(&v, 0, "too big (over 1 MB), the filter ignores it");
+        return 1;
+    }
+    if (is_httpd_ini(name)) {
+        report(&v, 0, "httpd.ini rules aren't supported yet, the filter ignores this file");
         return 1;
     }
     r = um_parse(text, len, UM_DIALECT_APACHE, parse_log, &v);

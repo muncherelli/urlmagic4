@@ -55,6 +55,12 @@ int main(void)
     ok(n == 0, "exactly 1 MB is fine");
     free(big);
 
+    got[0] = 0;
+    n = um_validate("C:\\sites\\HTTPD.INI", "RewriteEngine On\n", 17, emit, NULL, &rules);
+    ok(n == 1 && strstr(got, "httpd.ini rules aren't supported"), "a file called httpd.ini");
+    n = um_validate("httpd.ini.txt", "RewriteEngine On\n", 17, emit, NULL, &rules);
+    ok(n == 0, "httpd.ini.txt is a rules file");
+
     printf("test_validate: %d checks, %d failed\n", checked, failures);
     return failures ? 1 : 0;
 }

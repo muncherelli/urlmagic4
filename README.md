@@ -111,7 +111,8 @@ result=error code=6 errors=1
 ```
 
 `result=ok code=0 rules=N` means the file is fine; exit 6 means problems, 1 that the file can't be
-read, 2 a wrong command line. A file over 1 MB is a problem too (the filter ignores it). It prints
+read, 2 a wrong command line. A file over 1 MB is a problem too (the filter ignores it). So is a file called `httpd.ini`
+(not supported yet, ignored by the filter). It prints
 those lines with or without `/quiet`.
 
 The same check runs on Linux, for validating centrally before upload: `make validate` builds
