@@ -97,27 +97,41 @@ static int order_remove(const wchar_t *list, const wchar_t *name, wchar_t *out, 
     return ok;
 }
 
-/* list with name first or last (pos is ORDER_FIRST or ORDER_LAST), once; sspifilt, if the list
-   has it, stays last whatever pos is. 0 if it doesn't fit in out. */
+/* list with name placed by pos, once, and no other item moved:
+   ORDER_FIRST: first; ORDER_LAST: last (before sspifilt, if that is the final item);
+   ORDER_KEEP (no /order): right before sspifilt wherever it sits, or last if it isn't listed.
+   0 if it doesn't fit in out. */
 static int order_place(const wchar_t *list, const wchar_t *name, int pos, wchar_t *out, int cap)
 {
     const wchar_t *p = list;
     const wchar_t *b;
     int len;
+    int n = 0;                         /* items other than name */
+    int ssl = -1;                      /* index of sspifilt among them */
+    int ins;
+    int idx = 0;
     int ok = 1;
-    int ssl = order_has(list, ORDER_LAST_NAME);
-    out[0] = 0;
-    if (pos == ORDER_FIRST && !order_append(out, name, sc_len(name), cap)) ok = 0;
     while (order_next(&p, &b, &len)) {
-        if (sc_eqni(b, len, name) || sc_eqni(b, len, ORDER_LAST_NAME)) continue;
-        if (!order_append(out, b, len, cap)) ok = 0;
+        if (sc_eqni(b, len, name)) continue;
+        if (ssl < 0 && sc_eqni(b, len, ORDER_LAST_NAME)) ssl = n;
+        n++;
     }
-    if (pos != ORDER_FIRST && !order_append(out, name, sc_len(name), cap)) ok = 0;
-    if (ssl && !order_append(out, ORDER_LAST_NAME, sc_len(ORDER_LAST_NAME), cap)) ok = 0;
+    if (pos == ORDER_FIRST) ins = 0;
+    else if (pos == ORDER_LAST) ins = (ssl >= 0 && ssl == n - 1) ? n - 1 : n;
+    else ins = ssl >= 0 ? ssl : n;
+    out[0] = 0;
+    p = list;
+    while (order_next(&p, &b, &len)) {
+        if (sc_eqni(b, len, name)) continue;
+        if (idx == ins && !order_append(out, name, sc_len(name), cap)) ok = 0;
+        if (!order_append(out, b, len, cap)) ok = 0;
+        idx++;
+    }
+    if (idx <= ins && !order_append(out, name, sc_len(name), cap)) ok = 0;
     return ok;
 }
 
-/* is name in list where pos says (ORDER_KEEP: anywhere), with sspifilt last? */
+/* is name in list where pos says (ORDER_KEEP: anywhere)? */
 static int order_placed(const wchar_t *list, const wchar_t *name, int pos)
 {
     const wchar_t *p = list;
@@ -125,23 +139,29 @@ static int order_placed(const wchar_t *list, const wchar_t *name, int pos)
     int len;
     int idx = 0;
     int at = -1;
-    int last_ok = 1;                   /* name is last, ignoring sspifilt at the end */
-    int ssl_last = 1;                  /* sspifilt, if present, is the final item */
-    int prev_ssl = 0;
-    if (!order_has(list, name)) return 0;
+    int last_ok = 1;                   /* name is last, or only a final sspifilt follows */
+    int after = 0;                     /* items after name */
+    int after_ssl = 0;                 /* ... and the last of them is sspifilt */
     while (order_next(&p, &b, &len)) {
-        int is_name = sc_eqni(b, len, name);
-        int is_ssl = sc_eqni(b, len, ORDER_LAST_NAME);
-        if (prev_ssl) ssl_last = 0;
-        if (is_name) { at = idx; last_ok = 1; }
-        else if (!is_ssl) last_ok = 0;
-        prev_ssl = is_ssl;
+        if (sc_eqni(b, len, name)) { if (at < 0) at = idx; after = 0; after_ssl = 0; }
+        else if (at >= 0) { after++; after_ssl = sc_eqni(b, len, ORDER_LAST_NAME); }
         idx++;
     }
-    if (!ssl_last) return 0;
+    if (at < 0) return 0;
+    last_ok = after == 0 || (after == 1 && after_ssl);
     if (pos == ORDER_FIRST) return at == 0;
     if (pos == ORDER_LAST) return last_ok;
     return 1;
+}
+
+/* does the command line (argv[0] is the program) ask for /quiet? Looked at before parsing, so
+   that even a wrong command line gets the one result line. */
+static int um_quiet(int argc, wchar_t *const *argv)
+{
+    int i;
+    for (i = 1; i < argc; i++)
+        if ((argv[i][0] == L'/' || argv[i][0] == L'-') && sc_eqi(argv[i] + 1, L"quiet")) return 1;
+    return 0;
 }
 
 /* ---------------------------------------------------------------- the command line */

@@ -818,13 +818,15 @@ static void rec_string(METADATA_RECORD *r, DWORD id, DWORD utype, WCHAR *v)
     r->pbMDData = (unsigned char *)v;
 }
 
+#define ORDER_MAX 4096                   /* characters of FilterLoadOrder we handle */
+
 static BOOL filter_register(WCHAR *dll)
 {
     IMSAdminBaseW *mb = metabase();
     METADATA_HANDLE h;
     METADATA_RECORD r;
-    WCHAR order[1024];
-    WCHAR neworder[1100];
+    WCHAR order[ORDER_MAX];
+    WCHAR neworder[ORDER_MAX + 64];
     DWORD need = 0;
     HRESULT hr;
     BOOL result = FALSE;
@@ -841,8 +843,13 @@ static BOOL filter_register(WCHAR *dll)
     r.dwMDDataType = STRING_METADATA;
     r.dwMDDataLen = sizeof order;
     r.pbMDData = (unsigned char *)order;
-    mb->lpVtbl->GetData(mb, h, L"", &r, &need);       /* missing = empty list */
-    order[1023] = 0;
+    hr = mb->lpVtbl->GetData(mb, h, L"", &r, &need);
+    /* only a missing list is an empty one: any other failure must not turn into a write */
+    if (FAILED(hr) && hr != (HRESULT)MD_ERROR_DATA_NOT_FOUND) {
+        fail("can't read FilterLoadOrder", (DWORD)hr);
+        goto close;
+    }
+    order[ORDER_MAX - 1] = 0;
 
     hr = mb->lpVtbl->AddKey(mb, h, FILTER_NAME);
     if (FAILED(hr) && hr != HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)) {
@@ -864,11 +871,11 @@ static BOOL filter_register(WCHAR *dll)
         rec_string(&r, MD_FILTER_DESCRIPTION, IIS_MD_UT_SERVER, (WCHAR *)FILTER_DESC);
         hr = mb->lpVtbl->SetData(mb, h, FILTER_NAME, &r);
     }
-    /* in the list once; where /order says (default: last), and sspifilt stays last */
+    /* in the list once; where /order says (default: before sspifilt, or where it already is) */
     if (SUCCEEDED(hr) && (!order_has(order, FILTER_NAME) ||
                           (g_args.order != ORDER_KEEP && !order_placed(order, FILTER_NAME, g_args.order)))) {
-        if (!order_place(order, FILTER_NAME, g_args.order == ORDER_FIRST ? ORDER_FIRST : ORDER_LAST,
-                         neworder, 1100)) {
+        if (!order_place(order, FILTER_NAME, g_args.order,
+                         neworder, ORDER_MAX + 64)) {
             hr = HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
         } else {
             rec_string(&r, MD_FILTER_LOAD_ORDER, IIS_MD_UT_SERVER, neworder);
@@ -890,8 +897,8 @@ static BOOL filter_unregister(void)
     IMSAdminBaseW *mb = metabase();
     METADATA_HANDLE h;
     METADATA_RECORD r;
-    WCHAR order[1024];
-    WCHAR neworder[1024];
+    WCHAR order[ORDER_MAX];
+    WCHAR neworder[ORDER_MAX];
     DWORD need = 0;
     HRESULT hr;
 
@@ -906,8 +913,21 @@ static BOOL filter_unregister(void)
     r.dwMDDataType = STRING_METADATA;
     r.dwMDDataLen = sizeof order;
     r.pbMDData = (unsigned char *)order;
-    if (SUCCEEDED(mb->lpVtbl->GetData(mb, h, L"", &r, &need)) && order_has(order, FILTER_NAME)) {
-        order_remove(order, FILTER_NAME, neworder, 1024);
+    hr = mb->lpVtbl->GetData(mb, h, L"", &r, &need);
+    if (FAILED(hr) && hr != (HRESULT)MD_ERROR_DATA_NOT_FOUND) {      /* leave everything as it is */
+        fail("can't read FilterLoadOrder", (DWORD)hr);
+        mb->lpVtbl->CloseKey(mb, h);
+        mb->lpVtbl->Release(mb);
+        return FALSE;
+    }
+    order[ORDER_MAX - 1] = 0;
+    if (SUCCEEDED(hr) && order_has(order, FILTER_NAME)) {
+        if (!order_remove(order, FILTER_NAME, neworder, ORDER_MAX)) {
+            fail("FilterLoadOrder is too long to edit", 0);
+            mb->lpVtbl->CloseKey(mb, h);
+            mb->lpVtbl->Release(mb);
+            return FALSE;
+        }
         rec_string(&r, MD_FILTER_LOAD_ORDER, IIS_MD_UT_SERVER, neworder);
         mb->lpVtbl->SetData(mb, h, L"", &r);
     }
@@ -955,7 +975,7 @@ static BOOL filter_current(const WCHAR *dll)
 {
     IMSAdminBaseW *mb = metabase();
     METADATA_HANDLE h;
-    WCHAR order[1024];
+    WCHAR order[ORDER_MAX];
     WCHAR s[512];
     DWORD enabled = 0;
     BOOL good = FALSE;
@@ -965,7 +985,7 @@ static BOOL filter_current(const WCHAR *dll)
         order[0] = 0;
         s[0] = 0;
         md_get(mb, h, L"", MD_FILTER_LOAD_ORDER, STRING_METADATA, order, sizeof order);
-        order[1023] = 0;
+        order[ORDER_MAX - 1] = 0;
         good = order_placed(order, FILTER_NAME, g_args.order) &&
                md_get(mb, h, FILTER_NAME, MD_FILTER_IMAGE_PATH, STRING_METADATA, s, sizeof s) &&
                lstrcmpiW(s, dll) == 0 &&
@@ -1035,8 +1055,8 @@ static void join(WCHAR *outp, const WCHAR *dir, const WCHAR *file)
     int n;
     lstrcpynW(outp, dir, MAX_PATH);
     n = lstrlenW(outp);
-    if (n && outp[n - 1] != L'\\') lstrcatW(outp, L"\\");
-    lstrcatW(outp, file);
+    if (n && outp[n - 1] != L'\\' && n < MAX_PATH - 1) { outp[n++] = L'\\'; outp[n] = 0; }
+    lstrcpynW(outp + n, file, MAX_PATH - n);
 }
 
 /* The install folder recorded at install time (for uninstall). */
@@ -1383,6 +1403,7 @@ static DWORD extract_later(int id, const WCHAR *path)
 {
     WCHAR tmp[MAX_PATH];
     DWORD e;
+    if (lstrlenW(path) + 4 >= MAX_PATH) return ERROR_FILENAME_EXCED_RANGE;
     wsprintfW(tmp, L"%s.new", path);
     e = extract(id, tmp);
     if (!e && !MoveFileExW(tmp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_DELAY_UNTIL_REBOOT)) {
@@ -1425,7 +1446,7 @@ static void dir_note(int state)
         note("Couldn't restrict who may change the install folder (a FAT drive?): only administrators should be able to.");
 }
 
-static int install(const WCHAR *dir)
+static int install_run(const WCHAR *dir)
 {
     WCHAR src[MAX_PATH];
     WCHAR from[MAX_PATH];
@@ -1435,6 +1456,7 @@ static int install(const WCHAR *dir)
     BOOL stop = !g_args.norestart;       /* /norestart: no service is stopped or started */
     int dirstate;
 
+    if (lstrlenW(dir) > MAX_PATH - 64) { fail("the install folder's path is too long", 0); return RC_ERROR; }
     dir_of_exe(src);
     {
         char title[MAX_PATH + 40];
@@ -1452,7 +1474,7 @@ static int install(const WCHAR *dir)
 
     if (stop) {
         step(down_text());
-        if (!svc_down(&running)) return RC_ERROR;
+        if (!svc_down(&running)) { svc_back(running); return RC_ERROR; }
         ok();
     }
 
@@ -1659,7 +1681,7 @@ static BOOL anything_installed(const WCHAR *dir, BOOL purge)
     return found || filter_present();
 }
 
-static int uninstall(BOOL purge)
+static int uninstall_run(BOOL purge)
 {
     WCHAR dir[MAX_PATH];
     WCHAR f[MAX_PATH];
@@ -1668,6 +1690,7 @@ static int uninstall(BOOL purge)
     BOOL reboot;
 
     if (!installed_dir(dir)) default_dir(dir);
+    if (lstrlenW(dir) > MAX_PATH - 64) { fail("the install folder's path is too long", 0); return RC_ERROR; }
     {
         char title[MAX_PATH + 40];
         char d[MAX_PATH];
@@ -1684,7 +1707,7 @@ static int uninstall(BOOL purge)
 
     if (stop) {
         step(down_text());
-        if (!svc_down(&running)) return RC_ERROR;
+        if (!svc_down(&running)) { svc_back(running); return RC_ERROR; }
         ok();
     }
 
@@ -1732,6 +1755,66 @@ static int uninstall(BOOL purge)
     return g_errors ? RC_ERROR : (reboot ? RC_REBOOT : 0);
 }
 
+/* IISADMIN's state before setup: the metabase calls start it (through COM), so a box that
+   had it stopped gets it stopped again */
+static BOOL g_admin_was_down;
+
+static void admin_note(void)
+{
+    SC_HANDLE scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
+    SC_HANDLE adm;
+    SERVICE_STATUS st;
+    g_admin_was_down = FALSE;
+    if (!scm) return;
+    adm = OpenServiceW(scm, L"IISADMIN", SERVICE_QUERY_STATUS);
+    if (adm) {
+        g_admin_was_down = QueryServiceStatus(adm, &st) && st.dwCurrentState == SERVICE_STOPPED;
+        CloseServiceHandle(adm);
+    }
+    CloseServiceHandle(scm);
+}
+
+/* quiet and best effort: it's an extra, so errors aren't reported */
+static void admin_restore(void)
+{
+    SC_HANDLE scm;
+    SC_HANDLE adm;
+    SERVICE_STATUS st;
+    if (!g_admin_was_down) return;
+    scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
+    if (!scm) return;
+    adm = OpenServiceW(scm, L"IISADMIN", SERVICE_QUERY_STATUS | SERVICE_STOP | SERVICE_ENUMERATE_DEPENDENTS);
+    if (adm) {
+        if (QueryServiceStatus(adm, &st) && st.dwCurrentState == SERVICE_RUNNING) {
+            ENUM_SERVICE_STATUSW list[64];
+            DWORD need = 0;
+            DWORD n = 0;
+            if (EnumDependentServicesW(adm, SERVICE_ACTIVE, list, sizeof list, &need, &n) && n == 0)
+                ControlService(adm, SERVICE_CONTROL_STOP, &st);
+        }
+        CloseServiceHandle(adm);
+    }
+    CloseServiceHandle(scm);
+}
+
+static int install(const WCHAR *dir)
+{
+    int rc;
+    admin_note();
+    rc = install_run(dir);
+    admin_restore();
+    return rc;
+}
+
+static int uninstall(BOOL purge)
+{
+    int rc;
+    admin_note();
+    rc = uninstall_run(purge);
+    admin_restore();
+    return rc;
+}
+
 static void usage(void)
 {
     out("urlmagic " UM_VERSION_STR " setup\r\n\r\n  ");
@@ -1744,13 +1827,14 @@ static void usage(void)
         "Switches, for install and uninstall (any order):\r\n"
         "  /quiet          no colours, spinner or banner; the last line says how it went:\r\n"
         "                  result=ok code=0   or   result=error code=N msg=<text>\r\n"
+        "                  (result=pending for codes 3 and 4)\r\n"
         "  /norestart      stop and start no service; files in use are replaced at the next\r\n"
         "                  reboot (exit code 4)\r\n"
         "  /stopiis        stop IISADMIN (and with it W3SVC, MSFTPSVC, SMTPSVC), then start\r\n"
         "                  back what was running\r\n"
         "  /notab          install: don't register the URL Magic tab\r\n"
-        "  /order first|last   install: where urlmagic4 goes in FilterLoadOrder (default last;\r\n"
-        "                  sspifilt always stays last)\r\n"
+        "  /order first|last   install: where urlmagic4 goes in FilterLoadOrder (default: before\r\n"
+        "                  sspifilt; left where it is if already listed). Other filters never move\r\n"
         "\r\n"
         "Installing what is already installed, or removing what is gone, changes nothing (0).\r\n"
         "Only W3SVC is stopped by default, and started again only if it was running.\r\n"
@@ -2312,7 +2396,11 @@ static void quiet_result(int rc)
     msg[n] = 0;
     g_emit = TRUE;
     if (rc == 0) out("result=ok code=0\r\n");
-    else { wsprintfA(line, "result=error code=%d msg=%s\r\n", rc, msg[0] ? msg : "failed"); out(line); }
+    else {
+        wsprintfA(line, "result=%s code=%d msg=%s\r\n", (rc == RC_REBOOT || rc == RC_INUSE) ? "pending" : "error",
+                  rc, msg[0] ? msg : "failed");
+        out(line);
+    }
 }
 
 void WINAPI start(void)
@@ -2327,13 +2415,14 @@ void WINAPI start(void)
     /* double-click (no arguments), or Add/Remove Programs (/remove): the full-screen setup */
     g_interactive = argv && (argc == 1 || (argc == 2 && lstrcmpiW(argv[1], L"/remove") == 0));
     if (argv && !g_interactive) {
+        g_quiet = um_quiet(argc, argv);       /* before parsing, so a usage error is one line too */
         g_perr = um_parse(argc, argv, &g_args);
         if (!g_perr && g_args.cmd == CMD_VERSION) {       /* just the version, nothing else */
-            out(UM_VERSION_STR "\r\n");
+            g_emit = TRUE;
+            out(g_quiet ? "result=ok code=0 version=" UM_VERSION_STR "\r\n" : UM_VERSION_STR "\r\n");
             CoUninitialize();
             ExitProcess(0);
         }
-        g_quiet = g_args.quiet;
     }
 
     ui_init();

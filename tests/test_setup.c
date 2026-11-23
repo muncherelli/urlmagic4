@@ -39,15 +39,20 @@ static void test_order(void)
     place(L"", ORDER_FIRST, L"urlmagic4", "first, empty list");
     place(L"Compression,md5filt", ORDER_LAST, L"Compression,md5filt,urlmagic4", "last");
     place(L"Compression,md5filt", ORDER_FIRST, L"urlmagic4,Compression,md5filt", "first");
-    place(L"Compression,sspifilt", ORDER_LAST, L"Compression,urlmagic4,sspifilt", "last stays before sspifilt");
-    place(L"Compression,sspifilt", ORDER_FIRST, L"urlmagic4,Compression,sspifilt", "first, sspifilt last");
-    place(L"sspifilt,Compression", ORDER_LAST, L"Compression,urlmagic4,sspifilt", "sspifilt moved to the end");
-    place(L"sspifilt,Compression", ORDER_FIRST, L"urlmagic4,Compression,sspifilt", "sspifilt moved, first");
+    place(L"Compression,md5filt", ORDER_KEEP, L"Compression,md5filt,urlmagic4", "default: appended");
+    place(L"Compression,sspifilt", ORDER_LAST, L"Compression,urlmagic4,sspifilt", "last stays before a final sspifilt");
+    place(L"Compression,sspifilt", ORDER_FIRST, L"urlmagic4,Compression,sspifilt", "first");
+    place(L"Compression,sspifilt", ORDER_KEEP, L"Compression,urlmagic4,sspifilt", "default: before sspifilt");
+    place(L"sspifilt,Compression", ORDER_KEEP, L"urlmagic4,sspifilt,Compression", "default: sspifilt not moved");
+    place(L"sspifilt,Compression", ORDER_LAST, L"sspifilt,Compression,urlmagic4", "last: sspifilt not moved");
+    place(L"sspifilt,Compression", ORDER_FIRST, L"urlmagic4,sspifilt,Compression", "first: sspifilt not moved");
+    place(L"a,sspifilt,b", ORDER_KEEP, L"a,urlmagic4,sspifilt,b", "default: before a middle sspifilt");
     place(L"sspifilt", ORDER_FIRST, L"urlmagic4,sspifilt", "only sspifilt, first");
-    place(L"SSPIFILT", ORDER_LAST, L"urlmagic4,sspifilt", "sspifilt is case-insensitive");
+    place(L"SSPIFILT", ORDER_KEEP, L"urlmagic4,SSPIFILT", "sspifilt is case-insensitive, kept as is");
     place(L"a, urlmagic4 ,b", ORDER_LAST, L"a,b,urlmagic4", "already there: moved, trimmed");
     place(L"a,URLMAGIC4,b", ORDER_FIRST, L"urlmagic4,a,b", "already there, other case: once");
     place(L"a,,b,", ORDER_LAST, L"a,b,urlmagic4", "empty items dropped");
+    place(L"", ORDER_KEEP, L"urlmagic4", "default, empty list");
 
     ok(!order_place(L"aaaa", L"urlmagic4", ORDER_LAST, small, 8), "doesn't fit: reported");
     ok(sc_len(small) < 8, "doesn't fit: still terminated");
@@ -69,8 +74,11 @@ static void test_order(void)
     ok(!order_placed(L"a,urlmagic4", L"urlmagic4", ORDER_FIRST), "not first");
     ok(order_placed(L"a,urlmagic4,b", L"urlmagic4", ORDER_KEEP), "anywhere");
     ok(!order_placed(L"a,b", L"urlmagic4", ORDER_KEEP), "missing");
-    ok(!order_placed(L"sspifilt,urlmagic4", L"urlmagic4", ORDER_KEEP), "sspifilt not last");
-    ok(!order_placed(L"a,sspifilt,urlmagic4", L"urlmagic4", ORDER_LAST), "sspifilt not last, last asked");
+    /* an upgraded 4.1.x box: sspifilt, urlmagic4. With no /order that is current */
+    ok(order_placed(L"sspifilt,urlmagic4", L"urlmagic4", ORDER_KEEP), "after sspifilt: current without /order");
+    ok(order_placed(L"sspifilt,urlmagic4", L"urlmagic4", ORDER_LAST), "after sspifilt: last");
+    ok(!order_placed(L"urlmagic4,a,sspifilt", L"urlmagic4", ORDER_LAST), "not last, sspifilt after");
+    ok(!order_placed(L"a,urlmagic4,b,sspifilt", L"urlmagic4", ORDER_LAST), "not last, two after");
 }
 
 static void test_parse(void)
@@ -113,10 +121,25 @@ static void test_parse(void)
     ok(parse(&a, L"uninstall", L"install", NULL, NULL) != 0, "two commands");
 }
 
+/* /quiet is found even when the rest of the command line is wrong */
+static void test_quiet(void)
+{
+    const wchar_t *a1[] = { L"setup.exe", L"install", L"/bogus", L"/quiet" };
+    const wchar_t *a2[] = { L"setup.exe", L"install", L"/bogus" };
+    const wchar_t *a3[] = { L"setup.exe", L"-QUIET" };
+    um_args a;
+    ok(um_quiet(4, (wchar_t *const *)a1), "quiet found after a bad switch");
+    ok(um_parse(4, (wchar_t *const *)a1, &a) == 2 && a.err, "bad switch: usage error");
+    ok(!um_quiet(3, (wchar_t *const *)a2), "no /quiet");
+    ok(um_quiet(2, (wchar_t *const *)a3), "-QUIET");
+    ok(parse(&a, L"version", L"/quiet", NULL, NULL) == 0 && a.cmd == CMD_VERSION && a.quiet, "version /quiet");
+}
+
 int main(void)
 {
     test_order();
     test_parse();
+    test_quiet();
     printf("test_setup: %d checks, %d failed\n", checked, failures);
     return failures ? 1 : 0;
 }

@@ -30,17 +30,20 @@ urlmagic<version>.exe version
 ```
 
 - `/quiet`: no banner, colours or spinner, safe with redirected output. The last (only) line is
-  `result=ok code=0` or `result=error code=N msg=<text>`.
+  `result=ok code=0`, `result=error code=N msg=<text>`, or `result=pending code=N msg=<text>` for
+  exit codes 3 and 4 (a reboot finishes the job).
 - `/norestart`: stop and start no service. A file that is in use (the filter DLL IIS has loaded) is put
   in place at the next reboot instead, and the exit code is 4. The filter loads at the next W3SVC start.
 - `/stopiis`: stop IISADMIN, which takes W3SVC, MSFTPSVC and SMTPSVC down with it, then start back
   what was running. Without it only W3SVC is stopped, and it is started again only if it was running.
 - `/notab`: don't register the URL Magic tab (install only).
-- `/order first|last`: where urlmagic4 goes in IIS's `FilterLoadOrder` (default last). `sspifilt` always
-  stays last.
+- `/order first|last`: where urlmagic4 goes in IIS's `FilterLoadOrder` (default: before `sspifilt`;
+  left where it is if already listed). Other filters are never moved.
 - Installing what is already installed (same version, same files, same filter settings), or removing
   what is gone, changes nothing and exits 0.
-- `version` prints the version number only.
+- `version` prints the version number only; with `/quiet` it prints `result=ok code=0 version=X`.
+- Run from the full-screen or console menu, an install starts W3SVC again only if it was running, and
+  a system check that fails exits 5.
 
 | Exit code | Meaning |
 | --- | --- |
