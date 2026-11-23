@@ -177,7 +177,90 @@ static int um_quiet(int argc, wchar_t *const *argv)
 
 /* ---------------------------------------------------------------- the command line */
 
-enum { CMD_NONE = 0, CMD_INSTALL, CMD_UNINSTALL, CMD_VERSION, CMD_HELP };
+enum { CMD_NONE = 0, CMD_INSTALL, CMD_UNINSTALL, CMD_VERSION, CMD_HELP, CMD_STATUS, CMD_SITE };
+
+/* ---------------------------------------------------------------- per-site settings */
+
+enum { SITE_NONE = 0, SITE_ENABLE, SITE_DISABLE, SITE_SET };
+enum { SK_NONE = 0, SK_ENABLED, SK_FORMAT, SK_SOURCE, SK_RULESFILE, SK_DEBUG };
+
+/* the spellings the registry holds (src/common/settings.c), by number */
+static const wchar_t *const SC_FORMATS[] = { L"auto", L"htaccess", L"httpd.ini" };
+static const wchar_t *const SC_SOURCES[] = { L"docroot", L"file" };
+
+#define SITE_KV_MAX 8                    /* key=value pairs in one "site set" */
+#define SITE_PATH_MAX 259                /* characters of a rules file's path (MAX_PATH - 1) */
+
+/* which setting is the first n characters of k (SK_NONE if none) */
+static int site_key_id(const wchar_t *k, int n)
+{
+    if (sc_eqni(k, n, L"enabled")) return SK_ENABLED;
+    if (sc_eqni(k, n, L"format")) return SK_FORMAT;
+    if (sc_eqni(k, n, L"source")) return SK_SOURCE;
+    if (sc_eqni(k, n, L"rulesfile")) return SK_RULESFILE;
+    if (sc_eqni(k, n, L"debug")) return SK_DEBUG;
+    return SK_NONE;
+}
+
+/* the index of v in names (n of them), or -1 */
+static int site_name_index(const wchar_t *v, const wchar_t *const *names, int n)
+{
+    int i;
+    for (i = 0; i < n; i++)
+        if (sc_eqi(v, names[i])) return i;
+    return -1;
+}
+
+/* is v a site number: 1 to 9 digits, not zero? Sets *id. */
+static int site_id_ok(const wchar_t *v, unsigned long *id)
+{
+    int i;
+    unsigned long n = 0;
+    for (i = 0; v[i]; i++) {
+        if (v[i] < L'0' || v[i] > L'9' || i >= 9) return 0;
+        n = n * 10 + (unsigned long)(v[i] - L'0');
+    }
+    if (i == 0 || n == 0) return 0;
+    *id = n;
+    return 1;
+}
+
+/* is v an acceptable value for setting key? NULL if so, else why not. *num gets the number the
+   registry stores (0/1, or the index into SC_FORMATS / SC_SOURCES); unused for rulesfile. A
+   rules file is a full path (drive or UNC) or empty, which clears it. */
+static const char *site_value_check(int key, const wchar_t *v, int *num)
+{
+    int n;
+    int i;
+    int drive;
+    int unc;
+    switch (key) {
+    case SK_ENABLED:
+    case SK_DEBUG:
+        if (sc_eqi(v, L"1")) { *num = 1; return NULL; }
+        if (sc_eqi(v, L"0")) { *num = 0; return NULL; }
+        return key == SK_ENABLED ? "enabled must be 0 or 1" : "debug must be 0 or 1";
+    case SK_FORMAT:
+        *num = site_name_index(v, SC_FORMATS, 3);
+        return *num < 0 ? "format must be auto, htaccess or httpd.ini" : NULL;
+    case SK_SOURCE:
+        *num = site_name_index(v, SC_SOURCES, 2);
+        return *num < 0 ? "source must be docroot or file" : NULL;
+    case SK_RULESFILE:
+        n = sc_len(v);
+        if (n == 0) return NULL;
+        if (n > SITE_PATH_MAX) return "rulesfile is too long";
+        for (i = 0; i < n; i++)
+            if (v[i] < 32 || v[i] == L'"' || v[i] == L'<' || v[i] == L'>' || v[i] == L'|' ||
+                v[i] == L'*' || v[i] == L'?')
+                return "rulesfile has a character a path can't have";
+        drive = n > 2 && ((v[0] >= L'A' && v[0] <= L'Z') || (v[0] >= L'a' && v[0] <= L'z')) &&
+                v[1] == L':' && v[2] == L'\\';
+        unc = n > 2 && v[0] == L'\\' && v[1] == L'\\';
+        return drive || unc ? NULL : "rulesfile must be a full path (drive or UNC)";
+    }
+    return "unknown setting (enabled, format, source, rulesfile, debug)";
+}
 
 typedef struct {
     int cmd;
@@ -188,6 +271,11 @@ typedef struct {
     int purge;
     int order;                         /* ORDER_KEEP, ORDER_FIRST or ORDER_LAST */
     const wchar_t *dir;                /* install's folder, or NULL */
+    unsigned long site_id;             /* site: the W3SVC instance number */
+    int site_op;                       /* site: SITE_ENABLE, SITE_DISABLE or SITE_SET */
+    int npos;                          /* site: arguments seen after "site" */
+    int nkv;                           /* site set: the key=value pairs ... */
+    const wchar_t *kv[SITE_KV_MAX];    /* ... as typed */
     const char *err;                   /* why the command line is wrong, or NULL */
 } um_args;
 
@@ -197,13 +285,44 @@ static int sw_is(const wchar_t *arg, const wchar_t *name)
     return (arg[0] == L'/' || arg[0] == L'-') && sc_eqi(arg + 1, name);
 }
 
-/* argv[0] is the program. Returns 0, or nonzero with a->err set. Switches may come before or
-   after the command. */
+/* one argument of "site": the number, then enable, disable or set, then for set the key=value
+   pairs. Returns 0, 2 (not a command line) or 6 (a number, key or value that isn't valid). */
+static int um_parse_site(const wchar_t *s, um_args *a)
+{
+    int n = 0;
+    int num;
+    if (a->npos == 0) {
+        a->npos = 1;
+        if (!site_id_ok(s, &a->site_id)) { a->err = "site needs a number from 1 to 999999999"; return 6; }
+        return 0;
+    }
+    if (a->npos == 1) {
+        a->npos = 2;
+        if (sc_eqi(s, L"enable")) a->site_op = SITE_ENABLE;
+        else if (sc_eqi(s, L"disable")) a->site_op = SITE_DISABLE;
+        else if (sc_eqi(s, L"set")) a->site_op = SITE_SET;
+        else { a->err = "site needs enable, disable or set"; return 2; }
+        return 0;
+    }
+    if (a->site_op != SITE_SET) { a->err = "unexpected argument"; return 2; }
+    while (s[n] && s[n] != L'=') n++;
+    if (!s[n]) { a->err = "site set needs key=value"; return 2; }
+    if (a->nkv >= SITE_KV_MAX) { a->err = "too many settings in one site set"; return 2; }
+    a->err = site_value_check(site_key_id(s, n), s + n + 1, &num);
+    if (a->err) return 6;
+    a->kv[a->nkv++] = s;
+    return 0;
+}
+
+/* argv[0] is the program. Returns 0, or nonzero with a->err set: 2 for a wrong command line,
+   6 for a site number or setting that isn't valid. Switches may come before or after the
+   command. */
 static int um_parse(int argc, wchar_t *const *argv, um_args *a)
 {
     int i;
     a->cmd = CMD_NONE; a->quiet = 0; a->norestart = 0; a->stopiis = 0; a->notab = 0; a->purge = 0;
     a->order = ORDER_KEEP; a->dir = NULL; a->err = NULL;
+    a->site_id = 0; a->site_op = SITE_NONE; a->npos = 0; a->nkv = 0;
     for (i = 1; i < argc; i++) {
         const wchar_t *s = argv[i];
         if (sw_is(s, L"?") || sw_is(s, L"h") || (a->cmd == CMD_NONE && sc_eqi(s, L"help"))) {
@@ -231,7 +350,12 @@ static int um_parse(int argc, wchar_t *const *argv, um_args *a)
             if (sc_eqi(s, L"install")) a->cmd = CMD_INSTALL;
             else if (sc_eqi(s, L"uninstall")) a->cmd = CMD_UNINSTALL;
             else if (sc_eqi(s, L"version")) a->cmd = CMD_VERSION;
+            else if (sc_eqi(s, L"status")) a->cmd = CMD_STATUS;
+            else if (sc_eqi(s, L"site")) a->cmd = CMD_SITE;
             else { a->err = "unknown command"; return 2; }
+        } else if (a->cmd == CMD_SITE) {
+            int rc = um_parse_site(s, a);
+            if (rc) return rc;
         } else if (a->cmd == CMD_INSTALL && !a->dir) {
             a->dir = s;
         } else {
@@ -240,6 +364,11 @@ static int um_parse(int argc, wchar_t *const *argv, um_args *a)
         }
     }
     if (a->cmd == CMD_NONE) { a->err = "no command given"; return 2; }
+    if (a->cmd == CMD_SITE && a->site_op == SITE_NONE) {
+        a->err = a->npos ? "site needs enable, disable or set" : "site needs a number";
+        return 2;
+    }
+    if (a->cmd == CMD_SITE && a->site_op == SITE_SET && !a->nkv) { a->err = "site set needs key=value"; return 2; }
     if (a->purge && a->cmd != CMD_UNINSTALL) { a->err = "/purge is for uninstall"; return 2; }
     if (a->order != ORDER_KEEP && a->cmd != CMD_INSTALL) { a->err = "/order is for install"; return 2; }
     if (a->notab && a->cmd != CMD_INSTALL) { a->err = "/notab is for install"; return 2; }

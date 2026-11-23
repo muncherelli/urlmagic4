@@ -55,7 +55,7 @@ static BOOL g_emit;                    /* ... which is what this lets through */
 static char g_final[200];              /* the first thing that went wrong, for the result line */
 
 /* exit codes (documented in usage() and the README) */
-enum { RC_OK = 0, RC_ERROR = 1, RC_USAGE = 2, RC_REBOOT = 3, RC_INUSE = 4, RC_SYSTEM = 5 };
+enum { RC_OK = 0, RC_ERROR = 1, RC_USAGE = 2, RC_REBOOT = 3, RC_INUSE = 4, RC_SYSTEM = 5, RC_VALID = 6 };
 
 /* remember why we're failing, for the result line (the first reason wins) */
 static void keep_msg(const char *s)
@@ -789,11 +789,19 @@ static const char *up_text(void)
 
 /* ---------------------------------------------------------------- metabase */
 
-static IMSAdminBaseW *metabase(void)
+/* the metabase, or NULL with hr saying why */
+static IMSAdminBaseW *metabase_try(HRESULT *hr)
 {
     IMSAdminBaseW *mb = NULL;
-    HRESULT hr = CoCreateInstance(&CLSID_UmMSAdminBase, NULL, CLSCTX_ALL, &IID_UmIMSAdminBase, (void **)&mb);
-    if (FAILED(hr)) { fail("can't open the IIS metabase", (DWORD)hr); return NULL; }
+    *hr = CoCreateInstance(&CLSID_UmMSAdminBase, NULL, CLSCTX_ALL, &IID_UmIMSAdminBase, (void **)&mb);
+    return FAILED(*hr) ? NULL : mb;
+}
+
+static IMSAdminBaseW *metabase(void)
+{
+    HRESULT hr;
+    IMSAdminBaseW *mb = metabase_try(&hr);
+    if (!mb) fail("can't open the IIS metabase", (DWORD)hr);
     return mb;
 }
 
@@ -1821,6 +1829,165 @@ static int uninstall(BOOL purge)
     return rc;
 }
 
+/* ---------------------------------------------------------------- status and site (key=value lines) */
+
+/* name=value, the value from a wide string, with anything below a space (a line break, say)
+   turned into a space, so every item is one line */
+static void out_kv(const char *name, const WCHAR *v)
+{
+    WCHAR clean[MAX_PATH + 1];
+    int i;
+    for (i = 0; v[i] && i < MAX_PATH; i++) clean[i] = v[i] < 32 ? L' ' : v[i];
+    clean[i] = 0;
+    out(name);
+    out("=");
+    outw(clean);
+    out("\r\n");
+}
+
+/* name=<number> */
+static void out_kn(const char *name, unsigned long n)
+{
+    char buf[40];
+    wsprintfA(buf, "=%lu\r\n", n);
+    out(name);
+    out(buf);
+}
+
+/* the filter's state in IIS's metabase: absent, unlisted (its key is there but not in
+   FilterLoadOrder), disabled, enabled, or unknown when the metabase can't be opened */
+static const char *filter_state(void)
+{
+    HRESULT hr;
+    IMSAdminBaseW *mb = metabase_try(&hr);
+    METADATA_HANDLE h;
+    WCHAR order[ORDER_MAX];
+    WCHAR s[512];
+    DWORD enabled = 1;
+    const char *state = "absent";
+    if (!mb) return "unknown";
+    if (SUCCEEDED(mb->lpVtbl->OpenKey(mb, METADATA_MASTER_ROOT_HANDLE, FILTERS_KEY, METADATA_PERMISSION_READ,
+                                      30000, &h))) {
+        order[0] = 0;
+        md_get(mb, h, L"", MD_FILTER_LOAD_ORDER, STRING_METADATA, order, sizeof order);
+        order[ORDER_MAX - 1] = 0;
+        if (md_get(mb, h, FILTER_NAME, MD_FILTER_IMAGE_PATH, STRING_METADATA, s, sizeof s)) {
+            md_get(mb, h, FILTER_NAME, MD_FILTER_ENABLED, DWORD_METADATA, &enabled, sizeof enabled);
+            state = !order_has(order, FILTER_NAME) ? "unlisted" : enabled ? "enabled" : "disabled";
+        }
+        mb->lpVtbl->CloseKey(mb, h);
+    }
+    mb->lpVtbl->Release(mb);
+    return state;
+}
+
+/* site.<id>.<key>=value for each setting of site id */
+static void site_print(DWORD id, const um_site *st)
+{
+    char pre[40];
+    char name[60];
+    wsprintfA(pre, "site.%lu.", (unsigned long)id);
+    wsprintfA(name, "%senabled", pre);  out_kn(name, st->enabled);
+    wsprintfA(name, "%sformat", pre);   out_kv(name, SC_FORMATS[st->format <= 2 ? st->format : 0]);
+    wsprintfA(name, "%ssource", pre);   out_kv(name, SC_SOURCES[st->source <= 1 ? st->source : 0]);
+    wsprintfA(name, "%srulesfile", pre); out_kv(name, st->rules_file);
+    wsprintfA(name, "%sdebug", pre);    out_kn(name, st->debug);
+}
+
+/* "status": the machine's state as key=value lines (see the README) */
+static int status_cmd(void)
+{
+    WCHAR dir[MAX_PATH];
+    WCHAR ver[32];
+    WCHAR tab[MAX_PATH];
+    HKEY k;
+    DWORD type;
+    DWORD size;
+    DWORD i;
+    BOOL reg;
+    BOOL inst = installed_dir(dir);
+    ver[0] = 0;
+    if (inst && RegOpenKeyExW(HKEY_LOCAL_MACHINE, UM_REG_ROOT, 0, KEY_READ, &k) == ERROR_SUCCESS) {
+        size = sizeof ver - sizeof(WCHAR);
+        if (RegQueryValueExW(k, L"Version", NULL, &type, (BYTE *)ver, &size) != ERROR_SUCCESS || type != REG_SZ) ver[0] = 0;
+        else ver[size / sizeof(WCHAR)] = 0;
+        RegCloseKey(k);
+    }
+    out_kv("version", ver);
+    out("setup_version=" UM_VERSION_STR "\r\n");
+    out_kn("installed", inst);
+    out_kv("dir", inst ? dir : L"");
+    out("filter_state=");
+    out(filter_state());
+    out("\r\n");
+    /* the tab: is it registered, and does it point at the installed copy? (which consoles
+       show it is not read: that is up to each .msc file) */
+    reg = RegOpenKeyExW(HKEY_CLASSES_ROOT, TAB_INPROC, 0, KEY_READ, &k) == ERROR_SUCCESS;
+    if (reg) RegCloseKey(k);
+    out_kn("mmc_tab.registered", reg);
+    out_kn("mmc_tab.current", inst && join(tab, dir, L"urlmagic4-mmc-snap-in.dll") && tab_current(tab));
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UM_REG_SITES L"\\W3SVC", 0, KEY_READ, &k) == ERROR_SUCCESS) {
+        for (i = 0;; i++) {
+            WCHAR name[16];
+            DWORD n = 16;
+            unsigned long id;
+            um_site st;
+            if (RegEnumKeyExW(k, i, name, &n, NULL, NULL, NULL, NULL) != ERROR_SUCCESS) break;
+            if (!site_id_ok(name, &id)) continue;
+            if (um_site_read(HKEY_LOCAL_MACHINE, L"W3SVC", id, &st) == ERROR_SUCCESS) site_print(id, &st);
+        }
+        RegCloseKey(k);
+    }
+    return RC_OK;
+}
+
+/* why a site command failed: the result line, or the error= line, says it */
+static int site_fail(const char *why, DWORD code)
+{
+    char buf[200];
+    wsprintfA(buf, "%s (error %lu)", why, (unsigned long)code);
+    keep_msg(buf);
+    return RC_ERROR;
+}
+
+/* "site <id> enable|disable|set key=value ...": the arguments are already valid, so only
+   what depends on the other settings is left to check. Prints the site's settings. */
+static int site_cmd(void)
+{
+    um_site st;
+    LONG r;
+    int i;
+    int num;
+    r = um_site_read(HKEY_LOCAL_MACHINE, L"W3SVC", g_args.site_id, &st);
+    if (r != ERROR_SUCCESS) return site_fail("can't read the site's settings", (DWORD)r);
+    if (g_args.site_op == SITE_ENABLE) st.enabled = 1;
+    else if (g_args.site_op == SITE_DISABLE) st.enabled = 0;
+    for (i = 0; i < g_args.nkv; i++) {
+        const WCHAR *kv = g_args.kv[i];
+        int n = 0;
+        int key;
+        while (kv[n] != L'=') n++;
+        key = site_key_id(kv, n);
+        site_value_check(key, kv + n + 1, &num);
+        switch (key) {
+        case SK_ENABLED: st.enabled = (DWORD)num; break;
+        case SK_FORMAT: st.format = (DWORD)num; break;
+        case SK_SOURCE: st.source = (DWORD)num; break;
+        case SK_DEBUG: st.debug = (DWORD)num; break;
+        case SK_RULESFILE: lstrcpynW(st.rules_file, kv + n + 1, MAX_PATH); break;
+        }
+    }
+    if (st.source == UM_SRC_FILE && !st.rules_file[0]) {
+        keep_msg("source=file needs a rulesfile");
+        return RC_VALID;
+    }
+    r = um_site_write(HKEY_LOCAL_MACHINE, L"W3SVC", g_args.site_id, &st);
+    if (r != ERROR_SUCCESS) return site_fail("can't write the site's settings", (DWORD)r);
+    site_print(g_args.site_id, &st);
+    return RC_OK;
+}
+
 static void usage(void)
 {
     out("urlmagic " UM_VERSION_STR " setup\r\n\r\n  ");
@@ -1828,7 +1995,12 @@ static void usage(void)
     outw(g_self); out(" install [folder]   install or upgrade (default %SystemDrive%\\URLMagic4)\r\n  ");
     outw(g_self); out(" uninstall          remove urlmagic4 (keeps site settings)\r\n  ");
     outw(g_self); out(" uninstall /purge   remove urlmagic4 and every site's settings\r\n  ");
-    outw(g_self); out(" version            print the version\r\n"
+    outw(g_self); out(" version            print the version\r\n  ");
+    outw(g_self); out(" status             machine state as key=value lines (version, installed, dir,\r\n"
+        "                        filter_state, mmc_tab.*, site.<id>.*)\r\n  ");
+    outw(g_self); out(" site <id> enable|disable\r\n  ");
+    outw(g_self); out(" site <id> set key=value ...   enabled=0|1 format=auto|htaccess|httpd.ini\r\n"
+        "                        source=docroot|file rulesfile=<full path> debug=0|1\r\n"
         "\r\n"
         "Switches, for install and uninstall (any order):\r\n"
         "  /quiet          no colours, spinner or banner; the last line says how it went:\r\n"
@@ -1848,7 +2020,7 @@ static void usage(void)
         "Exit codes: 0 done, 1 error, 2 wrong command line, 3 reboot needed (uninstall left\r\n"
         "files), 4 files staged, replaced at the next reboot (/norestart only; a file that stays\r\n"
         "locked is an error, 1), 5 not NT with IIS,\r\n"
-        "6 validation failed (reserved).\r\n");
+        "6 a site number or setting isn't valid.\r\n");
 }
 
 /* ---------------------------------------------------------------- entry point (no CRT) */
@@ -2370,8 +2542,8 @@ static int console_main(int argc)
             out("\r\n\r\n");
             color(C_GREY);
         }
-        usage();
-        return g_perr ? RC_USAGE : 0;
+        if (g_perr != RC_VALID) usage();
+        return g_perr;
     }
     rc = check_system();
     if (rc) return rc;
@@ -2424,6 +2596,15 @@ void WINAPI start(void)
     if (argv && !g_interactive) {
         g_quiet = um_quiet(argc, argv);       /* before parsing, so a usage error is one line too */
         g_perr = um_parse(argc, argv, &g_args);
+        if (!g_perr && (g_args.cmd == CMD_STATUS || g_args.cmd == CMD_SITE)) {
+            g_emit = TRUE;                                /* key=value lines only: no banner */
+            rc = g_args.cmd == CMD_STATUS ? status_cmd() : site_cmd();
+            if (rc && !g_quiet) { out("error="); out(g_final); out("\r\n"); }
+            if (argv) LocalFree(argv);
+            CoUninitialize();
+            if (g_quiet) quiet_result(rc);
+            ExitProcess((UINT)rc);
+        }
         if (!g_perr && g_args.cmd == CMD_VERSION) {       /* just the version, nothing else */
             g_emit = TRUE;
             out(g_quiet ? "result=ok code=0 version=" UM_VERSION_STR "\r\n" : UM_VERSION_STR "\r\n");
