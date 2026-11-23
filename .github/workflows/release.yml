@@ -2,7 +2,7 @@ name: Release
 
 # release-please reads the Conventional Commits on trunk and keeps a "release" pull request
 # open (version bump in version.txt + CHANGELOG.md). Merging that pull request tags the
-# release; this workflow then builds the zip and attaches it to the GitHub release.
+# release; this workflow then builds the assets and attaches them to the GitHub release.
 on:
   push:
     branches: [trunk]
@@ -26,11 +26,13 @@ jobs:
       - name: Install the MinGW-w64 i686 cross-compiler
         if: steps.rp.outputs.release_created
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-mingw-w64-i686 binutils-mingw-w64-i686 make
-      - name: Build and attach the release zip
+      - name: Build and attach the release assets
         if: steps.rp.outputs.release_created
         run: |
-          make dist
-          (cd build && sha256sum urlmagic[0-9]*.exe urlmagic[0-9]*.zip > SHA256SUMS)
-          gh release upload "${{ steps.rp.outputs.tag_name }}" build/urlmagic[0-9]*.exe build/urlmagic[0-9]*.zip build/SHA256SUMS --clobber
+          # the installer, the zip, the bin-only zip and the Linux rules file validator
+          make dist dist-bin validate
+          cp build/urlmagic4-validate "build/urlmagic4-validate-$(cat version.txt)-linux-x86_64"
+          (cd build && sha256sum urlmagic[0-9]*.exe urlmagic[0-9]*.zip urlmagic4-validate-*-linux-x86_64 > SHA256SUMS)
+          gh release upload "${{ steps.rp.outputs.tag_name }}" build/urlmagic[0-9]*.exe build/urlmagic[0-9]*.zip build/urlmagic4-validate-*-linux-x86_64 build/SHA256SUMS --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
