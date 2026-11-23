@@ -25,6 +25,7 @@
 
 #include "../common/settings.h"
 #include "../engine/rewrite.h"
+#include "../engine/validate.h"
 #include "version.h"
 
 /* IMSAdminBase (IIS metabase), from iadmw.h */
@@ -37,7 +38,6 @@ static const GUID IID_UmIMSAdminBase =
 #define SETTINGS_EVERY  5000        /* ms between registry checks */
 #define HOME_EVERY      60000       /* ms between metabase checks */
 #define RULES_EVERY     2000        /* ms between rules-file checks */
-#define MAX_RULES_FILE  (1024 * 1024)
 #define URL_CAP         4096
 #define URL_MAX         65536       /* longer URLs get 414 */
 #define LOG_MAX         (1024 * 1024)
@@ -257,7 +257,7 @@ static char *read_rules_file(const WCHAR *path, const char *name, DWORD *len)
     *len = 0;
     if (f == INVALID_HANDLE_VALUE) return NULL;
     size = GetFileSize(f, NULL);
-    if (size > MAX_RULES_FILE) {
+    if (size > UM_MAX_RULES_FILE) {
         char m[MAX_PATH + 60];
         wsprintfA(m, "%s: too big (over 1 MB), ignored", name);
         log_line(m);
