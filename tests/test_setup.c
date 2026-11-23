@@ -132,10 +132,10 @@ static void test_parse(void)
 /* the command line as an array (argv[0] is added), up to 8 arguments, NULL-ended */
 static int parsev(um_args *a, const wchar_t *const *args)
 {
-    const wchar_t *argv[16] = { L"setup.exe" };
+    wchar_t *argv[16] = { L"setup.exe" };
     int argc = 1;
-    while (*args) argv[argc++] = *args++;
-    return um_parse(argc, (wchar_t *const *)argv, a);
+    while (*args) argv[argc++] = (wchar_t *)*args++;
+    return um_parse(argc, argv, a);
 }
 
 static void test_status_site(void)
@@ -157,6 +157,12 @@ static void test_status_site(void)
     const wchar_t *extra[] = { L"site", L"3", L"enable", L"debug=1", NULL };
     const wchar_t *id0[] = { L"site", L"0", L"enable", NULL };
     const wchar_t *idneg[] = { L"site", L"-1", L"enable", NULL };
+    const wchar_t *id03[] = { L"site", L"03", L"enable", NULL };
+    const wchar_t *emptykey[] = { L"site", L"3", L"set", L"=1", NULL };
+    wchar_t long_arg[300];
+    wchar_t arg259[300];
+    const wchar_t *longpath[] = { L"site", L"3", L"set", long_arg, NULL };
+    const wchar_t *path259[] = { L"site", L"3", L"set", arg259, NULL };
     const wchar_t *idbig[] = { L"site", L"1234567890", L"enable", NULL };
     const wchar_t *idtxt[] = { L"site", L"abc", L"enable", NULL };
     const wchar_t *badkey[] = { L"site", L"3", L"set", L"colour=red", NULL };
@@ -169,6 +175,12 @@ static void test_status_site(void)
                               L"debug=1", L"debug=1", L"debug=1", NULL };
     const wchar_t *toomany[] = { L"site", L"3", L"set", L"debug=1", L"debug=1", L"debug=1", L"debug=1", L"debug=1",
                                  L"debug=1", L"debug=1", L"debug=1", L"debug=1", NULL };
+
+    /* "rulesfile=D:\\" and then 'a's, so the path is 259 characters (long_arg: 260) */
+    wcscpy(arg259, L"rulesfile=D:\\");
+    while (wcslen(arg259) < 10 + 259) wcscat(arg259, L"a");
+    wcscpy(long_arg, arg259);
+    wcscat(long_arg, L"a");
 
     ok(parsev(&a, st) == 0 && a.cmd == CMD_STATUS && a.quiet, "status /quiet");
     ok(parsev(&a, st2) == 2, "status takes no argument");
@@ -184,7 +196,11 @@ static void test_status_site(void)
     ok(parsev(&a, nokv) == 2, "site set, no equals sign");
     ok(parsev(&a, extra) == 2, "site enable takes no pairs");
     ok(parsev(&a, id0) == 6, "site 0");
-    ok(parsev(&a, idneg) == 2 || parsev(&a, idneg) == 6, "site -1 is no site");
+    ok(parsev(&a, idneg) == 2, "site -1 is a switch, not a site");
+    ok(parsev(&a, id03) == 6, "leading zero");
+    ok(parsev(&a, emptykey) == 6, "empty key");
+    ok(parsev(&a, longpath) == 6, "rulesfile over 259 characters");
+    ok(parsev(&a, path259) == 0, "rulesfile of 259 characters");
     ok(parsev(&a, idbig) == 6, "site number too long");
     ok(parsev(&a, idtxt) == 6, "site number not a number");
     ok(parsev(&a, badkey) == 6, "unknown setting");

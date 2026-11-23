@@ -1838,7 +1838,7 @@ static void out_kv(const char *name, const WCHAR *v)
 {
     WCHAR clean[MAX_PATH + 1];
     int i;
-    for (i = 0; v[i] && i < MAX_PATH; i++) clean[i] = v[i] < 32 ? L' ' : v[i];
+    for (i = 0; v[i] && i < MAX_PATH; i++) clean[i] = (v[i] < 32 || (v[i] >= 0x7f && v[i] <= 0x9f)) ? L' ' : v[i];
     clean[i] = 0;
     out(name);
     out("=");
@@ -1930,11 +1930,13 @@ static int status_cmd(void)
 
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UM_REG_SITES L"\\W3SVC", 0, KEY_READ, &k) == ERROR_SUCCESS) {
         for (i = 0;; i++) {
-            WCHAR name[16];
-            DWORD n = 16;
+            WCHAR name[64];
+            DWORD n = 64;
             unsigned long id;
             um_site st;
-            if (RegEnumKeyExW(k, i, name, &n, NULL, NULL, NULL, NULL) != ERROR_SUCCESS) break;
+            LONG er = RegEnumKeyExW(k, i, name, &n, NULL, NULL, NULL, NULL);
+            if (er == ERROR_NO_MORE_ITEMS) break;
+            if (er != ERROR_SUCCESS) continue;       /* ERROR_MORE_DATA: a name too long to be a site */
             if (!site_id_ok(name, &id)) continue;
             if (um_site_read(HKEY_LOCAL_MACHINE, L"W3SVC", id, &st) == ERROR_SUCCESS) site_print(id, &st);
         }
@@ -1959,7 +1961,7 @@ static int site_cmd(void)
     um_site st;
     LONG r;
     int i;
-    int num;
+    int num = 0;
     r = um_site_read(HKEY_LOCAL_MACHINE, L"W3SVC", g_args.site_id, &st);
     if (r != ERROR_SUCCESS) return site_fail("can't read the site's settings", (DWORD)r);
     if (g_args.site_op == SITE_ENABLE) st.enabled = 1;
@@ -1977,6 +1979,7 @@ static int site_cmd(void)
         case SK_SOURCE: st.source = (DWORD)num; break;
         case SK_DEBUG: st.debug = (DWORD)num; break;
         case SK_RULESFILE: lstrcpynW(st.rules_file, kv + n + 1, MAX_PATH); break;
+        default: break;
         }
     }
     if (st.source == UM_SRC_FILE && !st.rules_file[0]) {
@@ -2639,6 +2642,15 @@ void WINAPI start(void)
     if (argv && !g_interactive) {
         g_quiet = um_quiet(argc, argv);       /* before parsing, so a usage error is one line too */
         g_perr = um_parse(argc, argv, &g_args);
+        if (g_perr && (g_args.cmd == CMD_STATUS || g_args.cmd == CMD_SITE)) {
+            g_emit = TRUE;                                /* a wrong status or site command: error= only */
+            keep_msg(g_args.err);
+            if (!g_quiet) { out("error="); out(g_args.err); out("\r\n"); }
+            if (argv) LocalFree(argv);
+            CoUninitialize();
+            if (g_quiet) quiet_result(g_perr);
+            ExitProcess((UINT)g_perr);
+        }
         if (!g_perr && (g_args.cmd == CMD_STATUS || g_args.cmd == CMD_SITE)) {
             g_emit = TRUE;                                /* key=value lines only: no banner */
             rc = g_args.cmd == CMD_STATUS ? status_cmd() : site_cmd();

@@ -211,11 +211,12 @@ static int site_name_index(const wchar_t *v, const wchar_t *const *names, int n)
     return -1;
 }
 
-/* is v a site number: 1 to 9 digits, not zero? Sets *id. */
+/* is v a site number: 1 to 9 digits, no leading zero? Sets *id. */
 static int site_id_ok(const wchar_t *v, unsigned long *id)
 {
     int i;
     unsigned long n = 0;
+    if (v[0] == L'0') return 0;                    /* no leading zero: "03" would be site 3 twice */
     for (i = 0; v[i]; i++) {
         if (v[i] < L'0' || v[i] > L'9' || i >= 9) return 0;
         n = n * 10 + (unsigned long)(v[i] - L'0');
@@ -258,6 +259,8 @@ static const char *site_value_check(int key, const wchar_t *v, int *num)
                 v[1] == L':' && v[2] == L'\\';
         unc = n > 2 && v[0] == L'\\' && v[1] == L'\\';
         return drive || unc ? NULL : "rulesfile must be a full path (drive or UNC)";
+    default:
+        break;
     }
     return "unknown setting (enabled, format, source, rulesfile, debug)";
 }
