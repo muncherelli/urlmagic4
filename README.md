@@ -92,8 +92,12 @@ settings are then printed as `site.<id>.*` lines. The number isn't checked again
 site can be configured before or after it is created. Writing needs an administrator (exit 1
 otherwise).
 
-With `/quiet`, the lines are followed by the usual `result=` line, and an error is only that line;
-without it an error is a single `error=<text>` line.
+With `/quiet`, the lines are followed by the usual `result=` line, and an error (including a wrong
+`status` or `site` command line) is only that line; without it an error is a single `error=<text>`
+line.
+
+`dir` and `rulesfile` are printed in the console's OEM code page: a character it can't show
+comes out as `?`, and control characters (below a space, and 0x7F to 0x9F) as a space.
 
 The filter is registered enabled (`FilterEnabled`) with a `FilterDescription`.
 
