@@ -164,7 +164,7 @@ $(B)/test_validate: tests/test_validate.c src/engine/validate.c src/engine/valid
 # so it runs on any gateway (a release asset). Try it on a file: build/urlmagic4-validate rules.txt
 validate: $(B)/urlmagic4-validate
 $(B)/urlmagic4-validate: tools/validate.c src/engine/validate.c src/engine/validate.h src/engine/rewrite.c src/engine/rewrite.h $(PCRE2_SRC) | $(B)
-	$(HOSTCC) $(TEST_FLAGS) -O2 -static -o $@ tools/validate.c src/engine/validate.c src/engine/rewrite.c $(PCRE2_SRC)
+	$(HOSTCC) $(TEST_FLAGS) -O2 -static -s -o $@ tools/validate.c src/engine/validate.c src/engine/rewrite.c $(PCRE2_SRC)
 
 test: $(B)/test_engine $(B)/test_engine_exact $(B)/test_engine_nofast $(B)/test_fastpath $(B)/test_scratch $(B)/test_setup $(B)/test_validate
 	$(B)/test_engine
