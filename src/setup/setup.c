@@ -5,6 +5,10 @@
  *   urlmagic4.0.0 install [dir]         install to dir (default %SystemDrive%\URLMagic4)
  *   urlmagic4.0.0 uninstall          remove (keeps each site's settings)
  *   urlmagic4.0.0 uninstall /purge   remove, including each site's settings
+ *   urlmagic4.0.0 version            print the version
+ *
+ * For scripts: /quiet (one result line, no console tricks), /norestart, /stopiis, /notab,
+ * /order first|last, and exit codes (see usage() and the README).
  *
  * Everything it installs is inside it (RCDATA resources, see payload.h), so this one file is
  * all you need. It also copies itself into the install folder, to uninstall later.
@@ -23,6 +27,7 @@
 #include "version.h"
 #include "payload.h"
 #include "../common/settings.h"
+#include "setupcore.h"
 
 static const GUID CLSID_UmMSAdminBase =
     {0xa9e69610, 0xb80d, 0x11d0, {0xb9, 0xb9, 0x00, 0xa0, 0xc9, 0x22, 0xe7, 0x50}};
@@ -31,6 +36,9 @@ static const GUID IID_UmIMSAdminBase =
 
 static const WCHAR FILTER_NAME[] = L"urlmagic4";
 static const WCHAR FILTERS_KEY[] = L"/LM/W3SVC/Filters";
+static const WCHAR FILTER_DESC[] = L"URL Magic 4: .htaccess-style URL rewriting";
+/* the tab's class (src/tab/tab.c), to see whether it is registered */
+static const WCHAR TAB_INPROC[] = L"CLSID\\{6349356F-8C6D-4813-94F6-7C8EB8085445}\\InprocServer32";
 /* installed files, in the order of their resource IDs (payload.h) */
 static const WCHAR *FILES[] = { L"urlmagic4.dll", L"urlmagic4-mmc-snap-in.dll", L"README.txt", L"LICENSE.txt",
                                 L"CHANGELOG.txt", NULL };
@@ -40,6 +48,20 @@ static HANDLE g_out;
 static WCHAR g_self[MAX_PATH];         /* this program's file name, e.g. urlmagic4.0.0.exe */
 static BOOL g_interactive;             /* double-clicked: ask, and wait before closing */
 static int g_errors;
+static um_args g_args;                 /* the command line, when it isn't a double-click */
+static int g_perr;                     /* ... and whether it was wrong */
+static BOOL g_quiet;                   /* /quiet: say nothing but the result line */
+static BOOL g_emit;                    /* ... which is what this lets through */
+static char g_final[200];              /* the first thing that went wrong, for the result line */
+
+/* exit codes (documented in usage() and the README) */
+enum { RC_OK = 0, RC_ERROR = 1, RC_USAGE = 2, RC_REBOOT = 3, RC_INUSE = 4, RC_SYSTEM = 5 };
+
+/* remember why we're failing, for the result line (the first reason wins) */
+static void keep_msg(const char *s)
+{
+    if (!g_final[0]) lstrcpynA(g_final, s, sizeof g_final);
+}
 
 /* ---------------------------------------------------------------- console output
  *
@@ -66,6 +88,7 @@ static void color(WORD a)
 static void out(const char *s)
 {
     DWORD w;
+    if (g_quiet && !g_emit) return;
     WriteFile(g_out, s, (DWORD)lstrlenA(s), &w, NULL);
     for (const char *p = s; *p; p++) {
         if (*p == '\n' || *p == '\r') g_col = 0;
@@ -91,7 +114,8 @@ static void ui_init(void)
 {
     CONSOLE_SCREEN_BUFFER_INFO ci;
     DWORD mode;
-    g_color = GetConsoleMode(g_out, &mode) && GetConsoleScreenBufferInfo(g_out, &ci);
+    g_color = !g_quiet && GetConsoleMode(g_out, &mode) && GetConsoleScreenBufferInfo(g_out, &ci);
+    if (g_quiet) return;                 /* no title, no icon: nothing but the result line */
     if (g_color) g_attr0 = ci.wAttributes;
     SetConsoleTitleA("URL Magic v" UM_VERSION_STR " Setup");
     {
@@ -222,6 +246,7 @@ static void logo_row(int lr)
 
 static void banner(void)
 {
+    if (g_quiet) return;
     out("\r\n");
     box_edge((char)0xC9, (char)0xBB);
     /* icon on the left (8 rows), logo beside it (5 rows, rows 2-6) */
@@ -515,6 +540,7 @@ static void step(const char *what)
 static void spin(void)
 {
     static const char chars[] = "|/-\\";
+    if (g_quiet) return;                 /* no spinner, no backspaces */
     if (g_tui) {
         char c[2] = { 0, 0 };
         g_spin = (g_spin + 1) % 4;
@@ -580,6 +606,7 @@ static void fail(const char *why, DWORD code)
     }
     if (code) wsprintfA(buf, "%s (error %lu)", why, (unsigned long)code);
     else lstrcpynA(buf, why, sizeof buf);
+    keep_msg(buf);
     msg(buf, C_RED);
     g_errors++;
 }
@@ -595,59 +622,169 @@ static void spin_wait(void)
     Sleep(250);
 }
 
-/* stop svc, whose status is st, and wait up to a minute for it */
-static BOOL www_stop(SC_HANDLE svc, SERVICE_STATUS *st)
+/* "can't <what to do> the <service>" */
+static void svc_fail(const char *to, const char *what, DWORD code)
 {
+    char buf[120];
+    wsprintfA(buf, "can't %s the %s", to, what);
+    fail(buf, code);
+}
+
+/* stop svc, whose status is st, and wait up to a minute for it */
+static BOOL svc_stop(SC_HANDLE svc, SERVICE_STATUS *st, const char *what)
+{
+    char buf[120];
     if (st->dwCurrentState != SERVICE_STOPPED && st->dwCurrentState != SERVICE_STOP_PENDING &&
         !ControlService(svc, SERVICE_CONTROL_STOP, st)) {
-        fail("can't stop the WWW service", GetLastError());
+        svc_fail("stop", what, GetLastError());
         return FALSE;
     }
     for (int i = 0; i < 120 && st->dwCurrentState != SERVICE_STOPPED; i++) {
         spin_wait();
         if (!QueryServiceStatus(svc, st)) break;
     }
-    if (st->dwCurrentState != SERVICE_STOPPED) { fail("the WWW service didn't stop", 0); return FALSE; }
+    if (st->dwCurrentState != SERVICE_STOPPED) {
+        wsprintfA(buf, "the %s didn't stop", what);
+        fail(buf, 0);
+        return FALSE;
+    }
     return TRUE;
 }
 
 /* start svc, whose status is st, and wait up to a minute for it */
-static BOOL www_start(SC_HANDLE svc, SERVICE_STATUS *st)
+static BOOL svc_start(SC_HANDLE svc, SERVICE_STATUS *st, const char *what)
 {
+    char buf[120];
     if (st->dwCurrentState == SERVICE_RUNNING) return TRUE;
-    if (!StartServiceW(svc, 0, NULL)) { fail("can't start the WWW service", GetLastError()); return FALSE; }
+    if (!StartServiceW(svc, 0, NULL)) { svc_fail("start", what, GetLastError()); return FALSE; }
     for (int i = 0; i < 120; i++) {
         spin_wait();
         if (!QueryServiceStatus(svc, st) || st->dwCurrentState != SERVICE_START_PENDING) break;
     }
-    if (st->dwCurrentState != SERVICE_RUNNING) { fail("the WWW service didn't start", 0); return FALSE; }
+    if (st->dwCurrentState != SERVICE_RUNNING) {
+        wsprintfA(buf, "the %s didn't start", what);
+        fail(buf, 0);
+        return FALSE;
+    }
     return TRUE;
 }
 
-/* Stop or start W3SVC; was_running says whether it was running before a stop. */
-static BOOL www(BOOL start, BOOL *was_running)
+/* Stop or start the service called name; was_running says whether it was running before a stop. */
+static BOOL svc_do(const WCHAR *name, const char *what, BOOL start, BOOL *was_running)
 {
     SC_HANDLE scm;
     SC_HANDLE svc;
     SERVICE_STATUS st;
     BOOL result = FALSE;
+    char buf[120];
 
     scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
     if (!scm) { fail("can't open the service manager", GetLastError()); return FALSE; }
-    svc = OpenServiceW(scm, L"W3SVC", SERVICE_START | SERVICE_STOP | SERVICE_QUERY_STATUS);
-    if (!svc) { fail("can't open the WWW service (is IIS installed?)", GetLastError()); CloseServiceHandle(scm); return FALSE; }
+    svc = OpenServiceW(scm, name, SERVICE_START | SERVICE_STOP | SERVICE_QUERY_STATUS);
+    if (!svc) {
+        wsprintfA(buf, "can't open the %s (is IIS installed?)", what);
+        fail(buf, GetLastError());
+        CloseServiceHandle(scm);
+        return FALSE;
+    }
 
     if (!QueryServiceStatus(svc, &st)) {
-        fail("can't query the WWW service", GetLastError());
+        svc_fail("query", what, GetLastError());
     } else if (start) {
-        result = www_start(svc, &st);
+        result = svc_start(svc, &st, what);
     } else {
         if (was_running) *was_running = st.dwCurrentState != SERVICE_STOPPED;
-        result = www_stop(svc, &st);
+        result = svc_stop(svc, &st, what);
     }
     CloseServiceHandle(svc);
     CloseServiceHandle(scm);
     return result;
+}
+
+/* Stop or start W3SVC. */
+static BOOL www(BOOL start, BOOL *was_running)
+{
+    return svc_do(L"W3SVC", "WWW service", start, was_running);
+}
+
+/* /stopiis: IISADMIN, with what runs on it (W3SVC, MSFTPSVC, SMTPSVC, ...). Stopping it takes
+   those down, so the ones running now are remembered, to be started again afterwards. */
+#define MAX_DEP 8
+static WCHAR g_dep[MAX_DEP][32];
+static int g_ndep;
+
+/* running is set if IISADMIN was running */
+static BOOL iis_stop(BOOL *running)
+{
+    SC_HANDLE scm;
+    SC_HANDLE adm;
+    SERVICE_STATUS st;
+    ENUM_SERVICE_STATUSW list[64];
+    DWORD need = 0;
+    DWORD n = 0;
+    BOOL result = FALSE;
+
+    g_ndep = 0;
+    *running = FALSE;
+    scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
+    if (!scm) { fail("can't open the service manager", GetLastError()); return FALSE; }
+    adm = OpenServiceW(scm, L"IISADMIN", SERVICE_QUERY_STATUS | SERVICE_ENUMERATE_DEPENDENTS);
+    if (!adm) {
+        fail("can't open the IIS admin service (is IIS installed?)", GetLastError());
+    } else if (!QueryServiceStatus(adm, &st)) {
+        svc_fail("query", "IIS admin service", GetLastError());
+    } else if (st.dwCurrentState == SERVICE_STOPPED) {
+        result = TRUE;
+    } else if (!EnumDependentServicesW(adm, SERVICE_ACTIVE, list, sizeof list, &need, &n) || n > MAX_DEP) {
+        fail("can't list the services that run on IIS", GetLastError());
+    } else {
+        for (DWORD i = 0; i < n; i++) lstrcpynW(g_dep[g_ndep++], list[i].lpServiceName, 32);
+        *running = result = TRUE;
+    }
+    if (adm) CloseServiceHandle(adm);
+    CloseServiceHandle(scm);
+    if (!result || !*running) return result;
+    for (int i = 0; i < g_ndep; i++)
+        if (!svc_do(g_dep[i], "service that runs on IIS", FALSE, NULL)) return FALSE;
+    return svc_do(L"IISADMIN", "IIS admin service", FALSE, NULL);
+}
+
+/* what setup stops: W3SVC, or with /stopiis IISADMIN and what runs on it */
+static BOOL svc_down(BOOL *running)
+{
+    return g_args.stopiis ? iis_stop(running) : www(FALSE, running);
+}
+
+/* /stopiis: the metabase is IISADMIN's, so it comes back first, for the filter settings */
+static BOOL svc_up_admin(void)
+{
+    return !g_args.stopiis || svc_do(L"IISADMIN", "IIS admin service", TRUE, NULL);
+}
+
+/* the rest, in the order they were stopped, backwards */
+static BOOL svc_up(void)
+{
+    BOOL good = TRUE;
+    if (!g_args.stopiis) return www(TRUE, NULL);
+    for (int i = g_ndep - 1; i >= 0; i--)
+        if (!svc_do(g_dep[i], "service that runs on IIS", TRUE, NULL)) good = FALSE;
+    return good;
+}
+
+/* the service(s) that were running before, back up (after an error, too) */
+static void svc_back(BOOL running)
+{
+    if (running && svc_up_admin()) svc_up();
+}
+
+static const char *down_text(void)
+{
+    return g_args.stopiis ? "Stopping IIS" : "Stopping the WWW service";
+}
+
+static const char *up_text(void)
+{
+    return g_args.stopiis ? "Starting IIS" : "Starting the WWW service";
 }
 
 /* ---------------------------------------------------------------- metabase */
@@ -660,6 +797,16 @@ static IMSAdminBaseW *metabase(void)
     return mb;
 }
 
+static void rec_dword(METADATA_RECORD *r, DWORD id, DWORD utype, DWORD *v)
+{
+    memset(r, 0, sizeof *r);
+    r->dwMDIdentifier = id;
+    r->dwMDUserType = utype;
+    r->dwMDDataType = DWORD_METADATA;
+    r->dwMDDataLen = sizeof *v;
+    r->pbMDData = (unsigned char *)v;
+}
+
 /* v isn't const: the record's data pointer isn't (SetData only reads it) */
 static void rec_string(METADATA_RECORD *r, DWORD id, DWORD utype, WCHAR *v)
 {
@@ -669,54 +816,6 @@ static void rec_string(METADATA_RECORD *r, DWORD id, DWORD utype, WCHAR *v)
     r->dwMDDataType = STRING_METADATA;
     r->dwMDDataLen = (DWORD)(lstrlenW(v) + 1) * sizeof(WCHAR);
     r->pbMDData = (unsigned char *)v;
-}
-
-/* case-insensitive: is name one of the comma-separated items in list? */
-static BOOL in_list(const WCHAR *list, const WCHAR *name)
-{
-    int n = lstrlenW(name);
-    const WCHAR *p = list;
-    while (*p) {
-        const WCHAR *e = p;
-        WCHAR item[128];
-        int len;
-        while (*e && *e != L',') e++;
-        len = (int)(e - p);
-        while (len && *p == L' ') { p++; len--; }
-        while (len && p[len - 1] == L' ') len--;
-        if (len == n && len < 128) {
-            lstrcpynW(item, p, len + 1);
-            if (lstrcmpiW(item, name) == 0) return TRUE;
-        }
-        p = *e ? e + 1 : e;
-    }
-    return FALSE;
-}
-
-/* add item (len characters) to the comma-separated outl, as far as it fits */
-static void append_item(WCHAR *outl, const WCHAR *item, int len, int cap)
-{
-    if (outl[0] && lstrlenW(outl) + 1 < cap) lstrcatW(outl, L",");
-    if (lstrlenW(outl) + len < cap) lstrcatW(outl, item);
-}
-
-/* list without name (comma-separated) */
-static void remove_from_list(const WCHAR *list, const WCHAR *name, WCHAR *outl, int cap)
-{
-    const WCHAR *p = list;
-    outl[0] = 0;
-    while (*p) {
-        const WCHAR *e = p;
-        WCHAR item[256];
-        int len;
-        while (*e && *e != L',') e++;
-        len = (int)(e - p);
-        if (len < 256) {
-            lstrcpynW(item, p, len + 1);
-            if (!in_list(item, name) && item[0]) append_item(outl, item, len, cap);
-        }
-        p = *e ? e + 1 : e;
-    }
 }
 
 static BOOL filter_register(WCHAR *dll)
@@ -756,12 +855,25 @@ static BOOL filter_register(WCHAR *dll)
         rec_string(&r, MD_FILTER_IMAGE_PATH, IIS_MD_UT_SERVER, dll);
         hr = mb->lpVtbl->SetData(mb, h, FILTER_NAME, &r);
     }
-    if (SUCCEEDED(hr) && !in_list(order, FILTER_NAME)) {
-        lstrcpynW(neworder, order, 1024);
-        if (neworder[0]) lstrcatW(neworder, L",");
-        lstrcatW(neworder, FILTER_NAME);
-        rec_string(&r, MD_FILTER_LOAD_ORDER, IIS_MD_UT_SERVER, neworder);
-        hr = mb->lpVtbl->SetData(mb, h, L"", &r);
+    if (SUCCEEDED(hr)) {
+        DWORD enabled = TRUE;
+        rec_dword(&r, MD_FILTER_ENABLED, IIS_MD_UT_SERVER, &enabled);
+        hr = mb->lpVtbl->SetData(mb, h, FILTER_NAME, &r);
+    }
+    if (SUCCEEDED(hr)) {
+        rec_string(&r, MD_FILTER_DESCRIPTION, IIS_MD_UT_SERVER, (WCHAR *)FILTER_DESC);
+        hr = mb->lpVtbl->SetData(mb, h, FILTER_NAME, &r);
+    }
+    /* in the list once; where /order says (default: last), and sspifilt stays last */
+    if (SUCCEEDED(hr) && (!order_has(order, FILTER_NAME) ||
+                          (g_args.order != ORDER_KEEP && !order_placed(order, FILTER_NAME, g_args.order)))) {
+        if (!order_place(order, FILTER_NAME, g_args.order == ORDER_FIRST ? ORDER_FIRST : ORDER_LAST,
+                         neworder, 1100)) {
+            hr = HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+        } else {
+            rec_string(&r, MD_FILTER_LOAD_ORDER, IIS_MD_UT_SERVER, neworder);
+            hr = mb->lpVtbl->SetData(mb, h, L"", &r);
+        }
     }
     if (FAILED(hr)) { fail("can't write the filter settings", (DWORD)hr); goto close; }
     result = TRUE;
@@ -794,8 +906,8 @@ static BOOL filter_unregister(void)
     r.dwMDDataType = STRING_METADATA;
     r.dwMDDataLen = sizeof order;
     r.pbMDData = (unsigned char *)order;
-    if (SUCCEEDED(mb->lpVtbl->GetData(mb, h, L"", &r, &need)) && in_list(order, FILTER_NAME)) {
-        remove_from_list(order, FILTER_NAME, neworder, 1024);
+    if (SUCCEEDED(mb->lpVtbl->GetData(mb, h, L"", &r, &need)) && order_has(order, FILTER_NAME)) {
+        order_remove(order, FILTER_NAME, neworder, 1024);
         rec_string(&r, MD_FILTER_LOAD_ORDER, IIS_MD_UT_SERVER, neworder);
         mb->lpVtbl->SetData(mb, h, L"", &r);
     }
@@ -806,7 +918,84 @@ static BOOL filter_unregister(void)
     return TRUE;
 }
 
+/* read one string or dword of the filter's key (name "") into v; FALSE if it isn't there */
+static BOOL md_get(IMSAdminBaseW *mb, METADATA_HANDLE h, const WCHAR *path, DWORD id, DWORD type,
+                   void *v, DWORD size)
+{
+    METADATA_RECORD r;
+    DWORD need = 0;
+    memset(&r, 0, sizeof r);
+    r.dwMDIdentifier = id;
+    r.dwMDUserType = IIS_MD_UT_SERVER;
+    r.dwMDDataType = type;
+    r.dwMDDataLen = size;
+    r.pbMDData = (unsigned char *)v;
+    return SUCCEEDED(mb->lpVtbl->GetData(mb, h, path, &r, &need));
+}
+
+/* is the urlmagic4 filter key in the metabase? */
+static BOOL filter_present(void)
+{
+    IMSAdminBaseW *mb = metabase();
+    METADATA_HANDLE h;
+    WCHAR path[128];
+    BOOL found = FALSE;
+    if (!mb) return FALSE;
+    wsprintfW(path, L"%s/%s", FILTERS_KEY, FILTER_NAME);
+    if (SUCCEEDED(mb->lpVtbl->OpenKey(mb, METADATA_MASTER_ROOT_HANDLE, path, METADATA_PERMISSION_READ, 30000, &h))) {
+        found = TRUE;
+        mb->lpVtbl->CloseKey(mb, h);
+    }
+    mb->lpVtbl->Release(mb);
+    return found;
+}
+
+/* is the filter registered exactly as install would (dll, enabled, description, load order)? */
+static BOOL filter_current(const WCHAR *dll)
+{
+    IMSAdminBaseW *mb = metabase();
+    METADATA_HANDLE h;
+    WCHAR order[1024];
+    WCHAR s[512];
+    DWORD enabled = 0;
+    BOOL good = FALSE;
+    if (!mb) return FALSE;
+    if (SUCCEEDED(mb->lpVtbl->OpenKey(mb, METADATA_MASTER_ROOT_HANDLE, FILTERS_KEY, METADATA_PERMISSION_READ,
+                                      30000, &h))) {
+        order[0] = 0;
+        s[0] = 0;
+        md_get(mb, h, L"", MD_FILTER_LOAD_ORDER, STRING_METADATA, order, sizeof order);
+        order[1023] = 0;
+        good = order_placed(order, FILTER_NAME, g_args.order) &&
+               md_get(mb, h, FILTER_NAME, MD_FILTER_IMAGE_PATH, STRING_METADATA, s, sizeof s) &&
+               lstrcmpiW(s, dll) == 0 &&
+               md_get(mb, h, FILTER_NAME, MD_FILTER_ENABLED, DWORD_METADATA, &enabled, sizeof enabled) &&
+               enabled &&
+               md_get(mb, h, FILTER_NAME, MD_FILTER_DESCRIPTION, STRING_METADATA, s, sizeof s) &&
+               lstrcmpiW(s, FILTER_DESC) == 0;
+        mb->lpVtbl->CloseKey(mb, h);
+    }
+    mb->lpVtbl->Release(mb);
+    return good;
+}
+
 /* ---------------------------------------------------------------- the tab (COM registration) */
+
+/* is the tab registered, with dll as its server? */
+static BOOL tab_current(const WCHAR *dll)
+{
+    HKEY k;
+    WCHAR v[MAX_PATH];
+    DWORD type;
+    DWORD size = sizeof v;
+    BOOL same = FALSE;
+    if (RegOpenKeyExW(HKEY_CLASSES_ROOT, TAB_INPROC, 0, KEY_READ, &k) == ERROR_SUCCESS) {
+        same = RegQueryValueExW(k, NULL, NULL, &type, (BYTE *)v, &size) == ERROR_SUCCESS && type == REG_SZ &&
+               lstrcmpiW(v, dll) == 0;
+        RegCloseKey(k);
+    }
+    return same;
+}
 
 static BOOL tab_register(const WCHAR *dll, BOOL reg)
 {
@@ -1053,7 +1242,8 @@ static void os_version(OSVERSIONINFOA *v)
     GetVersionExA(v);   /* NOSONAR: its replacement, VerifyVersionInfo, needs Windows 2000 */
 }
 
-static BOOL check_system(void)
+/* 0, or RC_SYSTEM: not NT, or no IIS */
+static int check_system(void)
 {
     OSVERSIONINFOA v;
     HKEY k;
@@ -1068,7 +1258,7 @@ static BOOL check_system(void)
     step("Windows");
     if (v.dwPlatformId != VER_PLATFORM_WIN32_NT) {
         fail("this is Windows 95/98/Me; urlmagic needs Windows NT 4.0 with IIS 4.0", 0);
-        return FALSE;
+        return RC_SYSTEM;
     }
     wsprintfA(line, "NT %lu.%lu%s%s", v.dwMajorVersion, v.dwMinorVersion,
               v.szCSDVersion[0] ? " " : "", v.szCSDVersion);
@@ -1085,13 +1275,13 @@ static BOOL check_system(void)
     }
     if (!major) {
         fail("IIS isn't installed (install it from the NT 4.0 Option Pack)", 0);
-        return FALSE;
+        return RC_SYSTEM;
     }
     wsprintfA(line, "%lu.%lu", major, minor);
     value(line, major == 4);
     if (major != 4) note("Not IIS 4.0: untested, carrying on.");
     out("\r\n");
-    return TRUE;
+    return 0;
 }
 
 /* Write one embedded file to path; returns 0 or a Win32 error code. */
@@ -1127,6 +1317,82 @@ static DWORD extract_retry(int id, const WCHAR *path)
     }
     return e;
 }
+
+/* is the file at path the embedded one id? */
+static BOOL file_is(int id, const WCHAR *path)
+{
+    static BYTE buf[16384];
+    HRSRC r = FindResourceW(NULL, MAKEINTRESOURCEW(id), (LPCWSTR)RT_RCDATA);
+    HGLOBAL g = r ? LoadResource(NULL, r) : NULL;
+    const BYTE *data = g ? LockResource(g) : NULL;
+    DWORD size = r ? SizeofResource(NULL, r) : 0;
+    DWORD got;
+    DWORD at = 0;
+    BOOL same = FALSE;
+    HANDLE f;
+
+    if (!data) return FALSE;
+    f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) return FALSE;
+    if (GetFileSize(f, NULL) == size) {
+        same = TRUE;
+        while (same && at < size && ReadFile(f, buf, sizeof buf, &got, NULL) && got) {
+            if (got > size - at || memcmp(buf, data + at, got) != 0) same = FALSE;
+            at += got;
+        }
+        if (at != size) same = FALSE;
+    }
+    CloseHandle(f);
+    return same;
+}
+
+/* is dir already holding exactly this install: the recorded folder and version, our files,
+   the tab, the filter as we'd register it? Then install has nothing to do. */
+static BOOL install_current(const WCHAR *dir)
+{
+    WCHAR have[MAX_PATH];
+    WCHAR f[MAX_PATH];
+    WCHAR ver[32];
+    HKEY k;
+    DWORD type;
+    DWORD size = sizeof ver;
+    BOOL same = FALSE;
+
+    if (!installed_dir(have) || lstrcmpiW(have, dir) != 0) return FALSE;
+    ver[0] = 0;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UM_REG_ROOT, 0, KEY_READ, &k) == ERROR_SUCCESS) {
+        same = RegQueryValueExW(k, L"Version", NULL, &type, (BYTE *)ver, &size) == ERROR_SUCCESS &&
+               type == REG_SZ && lstrcmpiW(ver, UM_VERSION_WSTR) == 0;
+        RegCloseKey(k);
+    }
+    if (!same) return FALSE;
+    for (int i = 0; FILES[i]; i++) {
+        join(f, dir, FILES[i]);
+        if (!file_is(FILE_IDS[i], f)) return FALSE;
+    }
+    join(f, dir, L"urlmagic4-mmc-snap-in.dll");
+    if (!g_args.notab && !tab_current(f)) return FALSE;
+    join(f, dir, L"urlmagic4.dll");
+    return filter_current(f);
+}
+
+/* An embedded file that's in use (a loaded DLL): written beside it, and put in place at the next
+   reboot. Returns 0 or a Win32 error code. */
+static DWORD extract_later(int id, const WCHAR *path)
+{
+    WCHAR tmp[MAX_PATH];
+    DWORD e;
+    wsprintfW(tmp, L"%s.new", path);
+    e = extract(id, tmp);
+    if (!e && !MoveFileExW(tmp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_DELAY_UNTIL_REBOOT)) {
+        e = GetLastError();
+        DeleteFileW(tmp);
+    }
+    return e;
+}
+
+static BOOL in_use(DWORD e) { return e == ERROR_SHARING_VIOLATION || e == ERROR_USER_MAPPED_FILE; }
 
 /* The install folder, made if need be. One we made (now or at an earlier install) gets our
    permissions; one that was already there for something else keeps its own. */
@@ -1165,6 +1431,8 @@ static int install(const WCHAR *dir)
     WCHAR from[MAX_PATH];
     WCHAR to[MAX_PATH];
     BOOL running = FALSE;
+    BOOL later = FALSE;                  /* some file waits for the next reboot (/norestart) */
+    BOOL stop = !g_args.norestart;       /* /norestart: no service is stopped or started */
     int dirstate;
 
     dir_of_exe(src);
@@ -1176,24 +1444,37 @@ static int install(const WCHAR *dir)
         section(title);
     }
 
-    step("Stopping the WWW service");
-    if (!www(FALSE, &running)) return 1;
-    ok();
+    /* from the command line, an install that is already in place is left alone */
+    if (!g_interactive && install_current(dir)) {
+        note("urlmagic " UM_VERSION_STR " is already installed here: nothing to do.");
+        return 0;
+    }
+
+    if (stop) {
+        step(down_text());
+        if (!svc_down(&running)) return RC_ERROR;
+        ok();
+    }
 
     step("Unpacking files");
     dirstate = make_dir(dir);
     for (int i = 0; FILES[i]; i++) {
         DWORD e;
         join(to, dir, FILES[i]);
-        e = extract_retry(FILE_IDS[i], to);
+        e = stop ? extract_retry(FILE_IDS[i], to) : extract(FILE_IDS[i], to);
+        if (!stop && in_use(e)) {
+            e = extract_later(FILE_IDS[i], to);
+            if (!e) { later = TRUE; continue; }
+        }
         if (e != 0) {
             char path[MAX_PATH];
             fail("can't write a file", e);
             WideCharToMultiByte(CP_OEMCP, 0, to, -1, path, MAX_PATH, NULL, NULL);
             msg(path, C_RED);
-            if (e == ERROR_SHARING_VIOLATION) note("It's still in use after a minute: close Internet Service Manager and run setup again.");
-            if (running) www(TRUE, NULL);
-            return 1;
+            if (in_use(e)) note("It's still in use after a minute: close Internet Service Manager and run setup again.");
+            svc_back(running);
+            if (in_use(e)) { keep_msg("a file is in use"); return RC_INUSE; }
+            return RC_ERROR;
         }
     }
     /* a copy of this program, for uninstalling later */
@@ -1205,18 +1486,31 @@ static int install(const WCHAR *dir)
     dir_note(dirstate);
     record_dir(dir);
 
-    step("Registering the URL Magic tab");
-    join(to, dir, L"urlmagic4-mmc-snap-in.dll");
-    if (tab_register(to, TRUE)) ok();
+    if (!g_args.notab) {
+        step("Registering the URL Magic tab");
+        join(to, dir, L"urlmagic4-mmc-snap-in.dll");
+        if (tab_register(to, TRUE)) ok();
+    }
     join(to, dir, L"urlmagic4tab.dll");          /* the tab's name in early 4.0.0 builds */
     DeleteFileW(to);
 
+    if (running && g_args.stopiis) {             /* the metabase is IISADMIN's */
+        step("Starting the IIS admin service");
+        if (!svc_up_admin()) return RC_ERROR;
+        ok();
+    }
     step("Adding the urlmagic4 ISAPI filter to IIS");
     join(to, dir, L"urlmagic4.dll");
     if (filter_register(to)) ok();
 
-    step("Starting the WWW service");
-    if (www(TRUE, NULL)) ok();
+    if (stop && running) {
+        step(up_text());
+        if (svc_up()) ok();
+    }
+    if (later) {
+        note("Some files were in use: they are replaced at the next reboot.");
+        keep_msg("files in use, replaced at the next reboot");
+    }
 
     if (g_tui) return g_errors ? 1 : 0;   /* the result screen is drawn by tui_main */
     out("\r\n");
@@ -1224,7 +1518,7 @@ static int install(const WCHAR *dir)
         color(C_RED);
         out("  \xFE Setup finished with errors (see above).\r\n");
         color(C_GREY);
-        return 1;
+        return RC_ERROR;
     }
     color(C_GREEN);
     out("  \xFE urlmagic " UM_VERSION_STR " is installed. Abracadabra!\r\n\r\n");
@@ -1249,7 +1543,7 @@ static int install(const WCHAR *dir)
     outw(to);
     color(C_GREY);
     out("\r\n");
-    return 0;
+    return later ? RC_INUSE : 0;
 }
 
 static void delete_tree(HKEY root, const WCHAR *path)
@@ -1341,11 +1635,36 @@ static void forget_install(void)
     }
 }
 
+/* is there anything of urlmagic4 to remove: a recorded install, its filter, its tab, its files
+   (or, for /purge, the settings)? */
+static BOOL anything_installed(const WCHAR *dir, BOOL purge)
+{
+    WCHAR f[MAX_PATH];
+    HKEY k;
+    BOOL found = FALSE;
+    WCHAR have[MAX_PATH];
+    if (installed_dir(have)) return TRUE;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UM_REG_ROOT, 0, KEY_READ, &k) == ERROR_SUCCESS) {
+        RegCloseKey(k);
+        if (purge) return TRUE;
+    }
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, ARP_KEY, 0, KEY_READ, &k) == ERROR_SUCCESS) {
+        RegCloseKey(k);
+        return TRUE;
+    }
+    for (int i = 0; FILES[i] && !found; i++) {
+        join(f, dir, FILES[i]);
+        found = GetFileAttributesW(f) != 0xFFFFFFFF;
+    }
+    return found || filter_present();
+}
+
 static int uninstall(BOOL purge)
 {
     WCHAR dir[MAX_PATH];
     WCHAR f[MAX_PATH];
     BOOL running = FALSE;
+    BOOL stop = !g_args.norestart;
     BOOL reboot;
 
     if (!installed_dir(dir)) default_dir(dir);
@@ -1357,11 +1676,25 @@ static int uninstall(BOOL purge)
         section(title);
     }
 
-    step("Stopping the WWW service");
-    if (!www(FALSE, &running)) return 1;
-    ok();
+    /* from the command line, removing what isn't there is not an error */
+    if (!g_interactive && !anything_installed(dir, purge)) {
+        note("urlmagic isn't installed: nothing to do.");
+        return 0;
+    }
+
+    if (stop) {
+        step(down_text());
+        if (!svc_down(&running)) return RC_ERROR;
+        ok();
+    }
 
     RegDeleteKeyW(HKEY_LOCAL_MACHINE, ARP_KEY);          /* out of Add/Remove Programs */
+
+    if (running && g_args.stopiis) {                     /* the metabase is IISADMIN's */
+        step("Starting the IIS admin service");
+        if (!svc_up_admin()) return RC_ERROR;
+        ok();
+    }
 
     step("Removing the urlmagic4 ISAPI filter from IIS");
     if (filter_unregister()) ok();
@@ -1384,10 +1717,11 @@ static int uninstall(BOOL purge)
         forget_install();
     }
 
-    if (running) {
-        step("Starting the WWW service");
-        if (www(TRUE, NULL)) ok();
+    if (stop && running) {
+        step(up_text());
+        if (svc_up()) ok();
     }
+    if (reboot) keep_msg("reboot needed: some files go at the next reboot");
     if (g_tui) return g_errors ? 1 : 0;
     out("\r\n");
     color(g_errors ? C_RED : C_GREEN);
@@ -1395,7 +1729,7 @@ static int uninstall(BOOL purge)
     color(C_DIM);
     if (!purge) { out("  Site settings were kept; `"); outw(g_self); out(" uninstall /purge` removes them too.\r\n"); }
     color(C_GREY);
-    return g_errors ? 1 : 0;
+    return g_errors ? RC_ERROR : (reboot ? RC_REBOOT : 0);
 }
 
 static void usage(void)
@@ -1404,7 +1738,26 @@ static void usage(void)
     outw(g_self); out("                    ask what to do\r\n  ");
     outw(g_self); out(" install [folder]   install or upgrade (default %SystemDrive%\\URLMagic4)\r\n  ");
     outw(g_self); out(" uninstall          remove urlmagic4 (keeps site settings)\r\n  ");
-    outw(g_self); out(" uninstall /purge   remove urlmagic4 and every site's settings\r\n");
+    outw(g_self); out(" uninstall /purge   remove urlmagic4 and every site's settings\r\n  ");
+    outw(g_self); out(" version            print the version\r\n"
+        "\r\n"
+        "Switches, for install and uninstall (any order):\r\n"
+        "  /quiet          no colours, spinner or banner; the last line says how it went:\r\n"
+        "                  result=ok code=0   or   result=error code=N msg=<text>\r\n"
+        "  /norestart      stop and start no service; files in use are replaced at the next\r\n"
+        "                  reboot (exit code 4)\r\n"
+        "  /stopiis        stop IISADMIN (and with it W3SVC, MSFTPSVC, SMTPSVC), then start\r\n"
+        "                  back what was running\r\n"
+        "  /notab          install: don't register the URL Magic tab\r\n"
+        "  /order first|last   install: where urlmagic4 goes in FilterLoadOrder (default last;\r\n"
+        "                  sspifilt always stays last)\r\n"
+        "\r\n"
+        "Installing what is already installed, or removing what is gone, changes nothing (0).\r\n"
+        "Only W3SVC is stopped by default, and started again only if it was running.\r\n"
+        "\r\n"
+        "Exit codes: 0 done, 1 error, 2 wrong command line, 3 reboot needed (uninstall left\r\n"
+        "files), 4 a file was in use (replaced at the next reboot), 5 not NT with IIS,\r\n"
+        "6 validation failed (reserved).\r\n");
 }
 
 /* ---------------------------------------------------------------- entry point (no CRT) */
@@ -1904,37 +2257,36 @@ static int ask_new(void)
 }
 
 /* "install [folder]" */
-static int install_cmd(int argc, WCHAR *const *argv)
+static int install_cmd(void)
 {
     WCHAR dir[MAX_PATH];
-    if (argc < 3) default_dir(dir);
-    else if (!GetFullPathNameW(argv[2], MAX_PATH, dir, NULL)) lstrcpynW(dir, argv[2], MAX_PATH);
+    if (!g_args.dir) default_dir(dir);
+    else if (!GetFullPathNameW(g_args.dir, MAX_PATH, dir, NULL)) lstrcpynW(dir, g_args.dir, MAX_PATH);
     return install(dir);
 }
 
-static BOOL is_command(const WCHAR *a)
-{
-    return lstrcmpiW(a, L"uninstall") == 0 || lstrcmpiW(a, L"install") == 0 || lstrcmpiW(a, L"/remove") == 0;
-}
-
-static BOOL is_help(const WCHAR *a)
-{
-    return lstrcmpiW(a, L"/?") == 0 || lstrcmpiW(a, L"-h") == 0 || lstrcmpiW(a, L"help") == 0;
-}
-
 /* the console (not full-screen) setup; returns the exit code */
-static int console_main(int argc, WCHAR *const *argv)
+static int console_main(int argc)
 {
     WCHAR have[MAX_PATH];
-    if (argc >= 2 && !is_command(argv[1])) {
+    int rc;
+    if (!g_interactive && (g_perr || g_args.cmd == CMD_HELP)) {
+        if (g_perr) {
+            keep_msg(g_args.err);
+            color(C_RED);
+            out("  ");
+            out(g_args.err);
+            out("\r\n\r\n");
+            color(C_GREY);
+        }
         usage();
-        return is_help(argv[1]) ? 0 : 2;
+        return g_perr ? RC_USAGE : 0;
     }
-    if (!check_system()) return 1;
+    rc = check_system();
+    if (rc) return rc;
     if (g_interactive) return installed_dir(have) ? ask_installed(have, argc == 2) : ask_new();
-    if (lstrcmpiW(argv[1], L"install") == 0) return install_cmd(argc, argv);
-    if (lstrcmpiW(argv[1], L"uninstall") == 0) return uninstall(argc >= 3 && lstrcmpiW(argv[2], L"/purge") == 0);
-    return 0;
+    if (g_args.cmd == CMD_INSTALL) return install_cmd();
+    return uninstall(g_args.purge);
 }
 
 /* g_self: this program's file name, without its folder */
@@ -1944,6 +2296,23 @@ static void set_self(void)
     int i = (int)GetModuleFileNameW(NULL, path, MAX_PATH);
     while (i > 0 && path[i - 1] != L'\\') i--;
     lstrcpynW(g_self, path + i, MAX_PATH);
+}
+
+/* /quiet: the one line that says how it went */
+static void quiet_result(int rc)
+{
+    static const char *const WHY[] = { "", "setup failed", "wrong command line", "reboot needed",
+                                       "a file is in use", "not Windows NT with IIS", "validation failed" };
+    char line[400];
+    char msg[sizeof g_final];
+    int n = 0;
+    if (!g_final[0] && rc > 0 && rc < (int)(sizeof WHY / sizeof WHY[0])) keep_msg(WHY[rc]);
+    for (const char *p = g_final; *p && n < (int)sizeof msg - 1; p++)       /* one line */
+        msg[n++] = (*p == '\r' || *p == '\n') ? ' ' : *p;
+    msg[n] = 0;
+    g_emit = TRUE;
+    if (rc == 0) out("result=ok code=0\r\n");
+    else { wsprintfA(line, "result=error code=%d msg=%s\r\n", rc, msg[0] ? msg : "failed"); out(line); }
 }
 
 void WINAPI start(void)
@@ -1957,6 +2326,15 @@ void WINAPI start(void)
     CoInitialize(NULL);
     /* double-click (no arguments), or Add/Remove Programs (/remove): the full-screen setup */
     g_interactive = argv && (argc == 1 || (argc == 2 && lstrcmpiW(argv[1], L"/remove") == 0));
+    if (argv && !g_interactive) {
+        g_perr = um_parse(argc, argv, &g_args);
+        if (!g_perr && g_args.cmd == CMD_VERSION) {       /* just the version, nothing else */
+            out(UM_VERSION_STR "\r\n");
+            CoUninitialize();
+            ExitProcess(0);
+        }
+        g_quiet = g_args.quiet;
+    }
 
     ui_init();
     if (g_interactive && tui_begin()) {
@@ -1966,12 +2344,14 @@ void WINAPI start(void)
         ExitProcess((UINT)rc);
     }
     banner();
-    rc = argv ? console_main(argc, argv) : 1;
+    if (argv) rc = console_main(argc);
+    else { keep_msg("can't read the command line"); rc = RC_ERROR; }
 
     if (g_interactive) wait_to_close();
     out("\r\n");
     ui_done();
     if (argv) LocalFree(argv);
     CoUninitialize();
+    if (g_quiet) quiet_result(rc);
     ExitProcess((UINT)rc);
 }
