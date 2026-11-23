@@ -129,6 +129,98 @@ static void test_parse(void)
     ok(parse(&a, L"uninstall", L"install", NULL, NULL) != 0, "two commands");
 }
 
+/* the command line as an array (argv[0] is added), up to 8 arguments, NULL-ended */
+static int parsev(um_args *a, const wchar_t *const *args)
+{
+    wchar_t *argv[16] = { L"setup.exe" };
+    int argc = 1;
+    while (*args) argv[argc++] = (wchar_t *)*args++;
+    return um_parse(argc, argv, a);
+}
+
+static void test_status_site(void)
+{
+    um_args a;
+    int num = -1;
+    const wchar_t *st[] = { L"status", L"/quiet", NULL };
+    const wchar_t *st2[] = { L"status", L"x", NULL };
+    const wchar_t *en[] = { L"site", L"3", L"enable", NULL };
+    const wchar_t *di[] = { L"SITE", L"12", L"Disable", L"/quiet", NULL };
+    const wchar_t *set[] = { L"site", L"3", L"set", L"format=httpd.ini", L"Debug=1", L"rulesfile=D:\\rules\\a.txt", NULL };
+    const wchar_t *unc[] = { L"site", L"3", L"set", L"rulesfile=\\\\host.example\\share\\a", L"source=file", NULL };
+    const wchar_t *clr[] = { L"site", L"3", L"set", L"rulesfile=", NULL };
+    const wchar_t *noid[] = { L"site", NULL };
+    const wchar_t *noop[] = { L"site", L"3", NULL };
+    const wchar_t *badop[] = { L"site", L"3", L"on", NULL };
+    const wchar_t *noset[] = { L"site", L"3", L"set", NULL };
+    const wchar_t *nokv[] = { L"site", L"3", L"set", L"debug", NULL };
+    const wchar_t *extra[] = { L"site", L"3", L"enable", L"debug=1", NULL };
+    const wchar_t *id0[] = { L"site", L"0", L"enable", NULL };
+    const wchar_t *idneg[] = { L"site", L"-1", L"enable", NULL };
+    const wchar_t *id03[] = { L"site", L"03", L"enable", NULL };
+    const wchar_t *emptykey[] = { L"site", L"3", L"set", L"=1", NULL };
+    wchar_t long_arg[300];
+    wchar_t arg259[300];
+    const wchar_t *longpath[] = { L"site", L"3", L"set", long_arg, NULL };
+    const wchar_t *path259[] = { L"site", L"3", L"set", arg259, NULL };
+    const wchar_t *idbig[] = { L"site", L"1234567890", L"enable", NULL };
+    const wchar_t *idtxt[] = { L"site", L"abc", L"enable", NULL };
+    const wchar_t *badkey[] = { L"site", L"3", L"set", L"colour=red", NULL };
+    const wchar_t *badfmt[] = { L"site", L"3", L"set", L"format=json", NULL };
+    const wchar_t *badsrc[] = { L"site", L"3", L"set", L"source=web", NULL };
+    const wchar_t *baden[] = { L"site", L"3", L"set", L"enabled=yes", NULL };
+    const wchar_t *relpath[] = { L"site", L"3", L"set", L"rulesfile=rules.txt", NULL };
+    const wchar_t *badch[] = { L"site", L"3", L"set", L"rulesfile=C:\\a|b", NULL };
+    const wchar_t *many[] = { L"site", L"3", L"set", L"debug=1", L"debug=1", L"debug=1", L"debug=1", L"debug=1",
+                              L"debug=1", L"debug=1", L"debug=1", NULL };
+    const wchar_t *toomany[] = { L"site", L"3", L"set", L"debug=1", L"debug=1", L"debug=1", L"debug=1", L"debug=1",
+                                 L"debug=1", L"debug=1", L"debug=1", L"debug=1", NULL };
+
+    /* "rulesfile=D:\\" and then 'a's, so the path is 259 characters (long_arg: 260) */
+    wcscpy(arg259, L"rulesfile=D:\\");
+    while (wcslen(arg259) < 10 + 259) wcscat(arg259, L"a");
+    wcscpy(long_arg, arg259);
+    wcscat(long_arg, L"a");
+
+    ok(parsev(&a, st) == 0 && a.cmd == CMD_STATUS && a.quiet, "status /quiet");
+    ok(parsev(&a, st2) == 2, "status takes no argument");
+    ok(parsev(&a, en) == 0 && a.cmd == CMD_SITE && a.site_id == 3 && a.site_op == SITE_ENABLE, "site enable");
+    ok(parsev(&a, di) == 0 && a.site_id == 12 && a.site_op == SITE_DISABLE && a.quiet, "site disable, any case");
+    ok(parsev(&a, set) == 0 && a.site_op == SITE_SET && a.nkv == 3, "site set, three pairs");
+    ok(parsev(&a, unc) == 0 && a.nkv == 2, "site set, UNC path");
+    ok(parsev(&a, clr) == 0 && a.nkv == 1, "site set, empty rulesfile clears it");
+    ok(parsev(&a, noid) == 2 && a.err, "site alone");
+    ok(parsev(&a, noop) == 2, "site without a verb");
+    ok(parsev(&a, badop) == 2, "site, unknown verb");
+    ok(parsev(&a, noset) == 2, "site set without pairs");
+    ok(parsev(&a, nokv) == 2, "site set, no equals sign");
+    ok(parsev(&a, extra) == 2, "site enable takes no pairs");
+    ok(parsev(&a, id0) == 6, "site 0");
+    ok(parsev(&a, idneg) == 2, "site -1 is a switch, not a site");
+    ok(parsev(&a, id03) == 6, "leading zero");
+    ok(parsev(&a, emptykey) == 6, "empty key");
+    ok(parsev(&a, longpath) == 6, "rulesfile over 259 characters");
+    ok(parsev(&a, path259) == 0, "rulesfile of 259 characters");
+    ok(parsev(&a, idbig) == 6, "site number too long");
+    ok(parsev(&a, idtxt) == 6, "site number not a number");
+    ok(parsev(&a, badkey) == 6, "unknown setting");
+    ok(parsev(&a, badfmt) == 6, "bad format");
+    ok(parsev(&a, badsrc) == 6, "bad source");
+    ok(parsev(&a, baden) == 6, "bad enabled");
+    ok(parsev(&a, relpath) == 6, "relative rulesfile");
+    ok(parsev(&a, badch) == 6, "bad character in rulesfile");
+    ok(parsev(&a, many) == 0 && a.nkv == 8, "eight pairs");
+    ok(parsev(&a, toomany) == 2, "nine pairs");
+
+    ok(site_value_check(SK_FORMAT, L"HTACCESS", &num) == NULL && num == 1, "format, any case");
+    ok(site_value_check(SK_SOURCE, L"File", &num) == NULL && num == 1, "source file");
+    ok(site_value_check(SK_ENABLED, L"1", &num) == NULL && num == 1, "enabled 1");
+    ok(site_value_check(SK_DEBUG, L"0", &num) == NULL && num == 0, "debug 0");
+    ok(site_value_check(SK_RULESFILE, L"c:\\x", &num) == NULL, "lower-case drive");
+    ok(site_value_check(SK_RULESFILE, L"c:x", &num) != NULL, "drive-relative path");
+    ok(site_value_check(SK_RULESFILE, L"\\\\", &num) != NULL, "bare backslashes");
+}
+
 /* /quiet is found even when the rest of the command line is wrong */
 static void test_quiet(void)
 {
@@ -147,6 +239,7 @@ int main(void)
 {
     test_order();
     test_parse();
+    test_status_site();
     test_quiet();
     printf("test_setup: %d checks, %d failed\n", checked, failures);
     return failures ? 1 : 0;

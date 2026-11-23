@@ -86,7 +86,8 @@ Each web site's Properties dialog in Internet Service Manager has a **URL Magic*
 rewriting on/off, rules format (automatic by file name, Apache, `httpd.ini`), and rules
 file (the site's home directory, or any file). Stored in
 `HKLM\SOFTWARE\URLMagic4\Sites\W3SVC\<site number>` (see `src/common/settings.h`); the filter
-re-reads it every few seconds.
+re-reads it every few seconds. Setup's `site <id> enable|disable|set` writes the same values
+from a script (see the README).
 
 ## 4. Directives (v1)
 

@@ -37,7 +37,7 @@ PCRE2_OBJS  = $(patsubst third_party/pcre2/src/%.c,$(B)/pcre2/%.o,$(PCRE2_SRC))
 FILTER_OBJS = $(B)/filter.o $(B)/filter.res.o $(B)/rewrite.o $(B)/settings.o $(B)/nocrt.o $(PCRE2_OBJS)
 FILTER_LIBS = -lkernel32 -luser32 -ladvapi32 -lole32 -lgcc
 
-SETUP_OBJS  = $(B)/setup.o $(B)/setup.res.o $(B)/nocrt.o
+SETUP_OBJS  = $(B)/setup.o $(B)/setup.res.o $(B)/settings.o $(B)/nocrt.o
 SETUP_LIBS  = -lkernel32 -luser32 -ladvapi32 -lole32 -lshell32 -lgcc
 
 all: $(B)/urlmagic4.dll $(B)/urlmagic4-mmc-snap-in.dll $(B)/$(SETUP_EXE)
@@ -76,7 +76,7 @@ $(B)/$(SETUP_EXE): $(SETUP_OBJS)
 	  -Wl,--disable-dynamicbase,--disable-nxcompat -o $@ $(SETUP_OBJS) $(SETUP_LIBS)
 	@if i686-w64-mingw32-objdump -d $@ | grep -qE '\bcmov|\bf(u)?comi'; then \
 	  echo "error: $@ uses P6-only instructions"; rm -f $@; exit 1; fi
-$(B)/setup.o: src/setup/setup.c src/setup/setupcore.h src/setup/payload.h $(B)/version.h | $(B)
+$(B)/setup.o: src/setup/setup.c src/setup/setupcore.h src/setup/payload.h src/common/settings.h $(B)/version.h | $(B)
 	$(CC) $(CFLAGS) -I $(B) -c -o $@ $<
 # docs for NT 4.0: .txt names, Windows-1252 and CRLF line endings, so Notepad shows them properly
 DOCS = $(B)/README.txt $(B)/LICENSE.txt $(B)/CHANGELOG.txt
