@@ -744,7 +744,10 @@ um_rules *um_parse(const char *text, size_t len, int dialect, um_log_fn log, voi
         int last;
         int argc;
         char *s = read_line(&p, text, len, &i);
-        if (!s) break;
+        if (!s) {            /* a constant, as saying anything may need memory too */
+            if (p.log) p.log(p.ctx, p.line, "out of memory: the rest of the file was not read");
+            break;
+        }
         last = p.line;
         p.line = first;
         argc = split(s, argv);
