@@ -177,7 +177,7 @@ static int um_quiet(int argc, wchar_t *const *argv)
 
 /* ---------------------------------------------------------------- the command line */
 
-enum { CMD_NONE = 0, CMD_INSTALL, CMD_UNINSTALL, CMD_VERSION, CMD_HELP, CMD_STATUS, CMD_SITE };
+enum { CMD_NONE = 0, CMD_INSTALL, CMD_UNINSTALL, CMD_VERSION, CMD_HELP, CMD_STATUS, CMD_SITE, CMD_VALIDATE };
 
 /* ---------------------------------------------------------------- per-site settings */
 
@@ -274,6 +274,7 @@ typedef struct {
     int purge;
     int order;                         /* ORDER_KEEP, ORDER_FIRST or ORDER_LAST */
     const wchar_t *dir;                /* install's folder, or NULL */
+    const wchar_t *file;               /* validate: the rules file, or NULL */
     unsigned long site_id;             /* site: the W3SVC instance number */
     int site_op;                       /* site: SITE_ENABLE, SITE_DISABLE or SITE_SET */
     int npos;                          /* site: arguments seen after "site" */
@@ -324,7 +325,7 @@ static int um_parse(int argc, wchar_t *const *argv, um_args *a)
 {
     int i;
     a->cmd = CMD_NONE; a->quiet = 0; a->norestart = 0; a->stopiis = 0; a->notab = 0; a->purge = 0;
-    a->order = ORDER_KEEP; a->dir = NULL; a->err = NULL;
+    a->order = ORDER_KEEP; a->dir = NULL; a->file = NULL; a->err = NULL;
     a->site_id = 0; a->site_op = SITE_NONE; a->npos = 0; a->nkv = 0;
     for (i = 1; i < argc; i++) {
         const wchar_t *s = argv[i];
@@ -355,10 +356,13 @@ static int um_parse(int argc, wchar_t *const *argv, um_args *a)
             else if (sc_eqi(s, L"version")) a->cmd = CMD_VERSION;
             else if (sc_eqi(s, L"status")) a->cmd = CMD_STATUS;
             else if (sc_eqi(s, L"site")) a->cmd = CMD_SITE;
+            else if (sc_eqi(s, L"validate")) a->cmd = CMD_VALIDATE;
             else { a->err = "unknown command"; return 2; }
         } else if (a->cmd == CMD_SITE) {
             int rc = um_parse_site(s, a);
             if (rc) return rc;
+        } else if (a->cmd == CMD_VALIDATE && !a->file) {
+            a->file = s;
         } else if (a->cmd == CMD_INSTALL && !a->dir) {
             a->dir = s;
         } else {
@@ -372,6 +376,7 @@ static int um_parse(int argc, wchar_t *const *argv, um_args *a)
         return 2;
     }
     if (a->cmd == CMD_SITE && a->site_op == SITE_SET && !a->nkv) { a->err = "site set needs key=value"; return 2; }
+    if (a->cmd == CMD_VALIDATE && !a->file) { a->err = "validate needs a rules file"; return 2; }
     if (a->purge && a->cmd != CMD_UNINSTALL) { a->err = "/purge is for uninstall"; return 2; }
     if (a->order != ORDER_KEEP && a->cmd != CMD_INSTALL) { a->err = "/order is for install"; return 2; }
     if (a->notab && a->cmd != CMD_INSTALL) { a->err = "/notab is for install"; return 2; }

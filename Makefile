@@ -2,7 +2,9 @@
 #   make            build/urlmagic4.dll (the filter), build/urlmagic4-mmc-snap-in.dll (the tab) and
 #                   build/urlmagic<version>.exe, e.g. urlmagic4.0.0.exe (the installer)
 #   make test       run the rewrite engine's tests natively
+#   make validate   build/urlmagic4-validate, the rules file validator for Linux
 #   make dist       build/urlmagic<version>.zip (the installer + README, LICENSE, CHANGELOG)
+#   make dist-bin   build/urlmagic<version>-bin.zip (the installer and the two DLLs, nothing else)
 #   make install    copy the DLLs to $(DEST) (default ~/Development/files)
 comma := ,
 VERSION := $(strip $(shell cat version.txt))
@@ -37,7 +39,7 @@ PCRE2_OBJS  = $(patsubst third_party/pcre2/src/%.c,$(B)/pcre2/%.o,$(PCRE2_SRC))
 FILTER_OBJS = $(B)/filter.o $(B)/filter.res.o $(B)/rewrite.o $(B)/settings.o $(B)/nocrt.o $(PCRE2_OBJS)
 FILTER_LIBS = -lkernel32 -luser32 -ladvapi32 -lole32 -lgcc
 
-SETUP_OBJS  = $(B)/setup.o $(B)/setup.res.o $(B)/settings.o $(B)/nocrt.o
+SETUP_OBJS  = $(B)/setup.o $(B)/setup.res.o $(B)/settings.o $(B)/rewrite.o $(B)/validate.o $(B)/nocrt.o $(PCRE2_OBJS)
 SETUP_LIBS  = -lkernel32 -luser32 -ladvapi32 -lole32 -lshell32 -lgcc
 
 all: $(B)/urlmagic4.dll $(B)/urlmagic4-mmc-snap-in.dll $(B)/$(SETUP_EXE)
@@ -76,8 +78,10 @@ $(B)/$(SETUP_EXE): $(SETUP_OBJS)
 	  -Wl,--disable-dynamicbase,--disable-nxcompat -o $@ $(SETUP_OBJS) $(SETUP_LIBS)
 	@if i686-w64-mingw32-objdump -d $@ | grep -qE '\bcmov|\bf(u)?comi'; then \
 	  echo "error: $@ uses P6-only instructions"; rm -f $@; exit 1; fi
-$(B)/setup.o: src/setup/setup.c src/setup/setupcore.h src/setup/payload.h src/common/settings.h $(B)/version.h | $(B)
+$(B)/setup.o: src/setup/setup.c src/setup/setupcore.h src/setup/payload.h src/common/settings.h src/engine/validate.h $(B)/version.h | $(B)
 	$(CC) $(CFLAGS) -I $(B) -c -o $@ $<
+$(B)/validate.o: src/engine/validate.c src/engine/validate.h src/engine/rewrite.h | $(B)
+	$(CC) $(CFLAGS) -c -o $@ $<
 # docs for NT 4.0: .txt names, Windows-1252 and CRLF line endings, so Notepad shows them properly
 DOCS = $(B)/README.txt $(B)/LICENSE.txt $(B)/CHANGELOG.txt
 $(B)/README.txt: README.md tools/totxt.py | $(B)
@@ -117,10 +121,17 @@ $(B)/bench.o: tests/bench.c src/engine/rewrite.h | $(B)
 	$(CC) $(FAST_CFLAGS) -c -o $@ $<
 
 dist: all $(DOCS)
-	rm -rf $(B)/dist $(B)/urlmagic[0-9]*.zip
+	rm -rf $(B)/dist $(B)/urlmagic[0-9]*[0-9].zip
 	mkdir -p $(B)/dist
 	cp $(B)/$(SETUP_EXE) $(DOCS) $(B)/dist/
 	cd $(B)/dist && python3 -m zipfile -c ../urlmagic$(VERSION).zip *
+
+# build/urlmagic<version>-bin.zip: just the binaries (the installer and the two DLLs it carries)
+dist-bin: all
+	rm -rf $(B)/dist-bin $(B)/urlmagic[0-9]*-bin.zip
+	mkdir -p $(B)/dist-bin
+	cp $(B)/$(SETUP_EXE) $(B)/urlmagic4.dll $(B)/urlmagic4-mmc-snap-in.dll $(B)/dist-bin/
+	cd $(B)/dist-bin && python3 -m zipfile -c ../urlmagic$(VERSION)-bin.zip *
 
 # ---- native tests of the rewrite engine (gcc + libc on Linux)
 HOSTCC     ?= gcc
@@ -146,13 +157,23 @@ $(B)/test_scratch: tests/test_scratch.c src/engine/rewrite.c src/engine/rewrite.
 $(B)/test_setup: tests/test_setup.c src/setup/setupcore.h | $(B)
 	$(HOSTCC) $(TEST_FLAGS) -fsanitize=address,undefined -o $@ tests/test_setup.c
 
-test: $(B)/test_engine $(B)/test_engine_exact $(B)/test_engine_nofast $(B)/test_fastpath $(B)/test_scratch $(B)/test_setup
+$(B)/test_validate: tests/test_validate.c src/engine/validate.c src/engine/validate.h src/engine/rewrite.c src/engine/rewrite.h $(PCRE2_SRC) | $(B)
+	$(HOSTCC) $(TEST_FLAGS) -fsanitize=address,undefined -o $@ tests/test_validate.c src/engine/validate.c src/engine/rewrite.c $(PCRE2_SRC)
+
+# urlmagic4-validate: the rules file validator for Linux, from the engine's own sources, static
+# so it runs on any gateway (a release asset). Try it on a file: build/urlmagic4-validate rules.txt
+validate: $(B)/urlmagic4-validate
+$(B)/urlmagic4-validate: tools/validate.c src/engine/validate.c src/engine/validate.h src/engine/rewrite.c src/engine/rewrite.h $(PCRE2_SRC) | $(B)
+	$(HOSTCC) $(TEST_FLAGS) -O2 -static -s -o $@ tools/validate.c src/engine/validate.c src/engine/rewrite.c $(PCRE2_SRC)
+
+test: $(B)/test_engine $(B)/test_engine_exact $(B)/test_engine_nofast $(B)/test_fastpath $(B)/test_scratch $(B)/test_setup $(B)/test_validate
 	$(B)/test_engine
 	$(B)/test_engine_exact
 	$(B)/test_engine_nofast
 	$(B)/test_fastpath
 	$(B)/test_scratch
 	$(B)/test_setup
+	$(B)/test_validate
 
 install: all
 	rm -f $(DEST)/setup.exe $(DEST)/urlmagic4-v*.exe $(DEST)/urlmagic[0-9]*.exe
@@ -163,4 +184,4 @@ install: all
 clean:
 	rm -rf $(B)
 
-.PHONY: all dist test install clean bench
+.PHONY: all dist dist-bin test install clean bench validate

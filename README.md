@@ -28,6 +28,7 @@ urlmagic<version>.exe install [folder] [/quiet] [/norestart | /stopiis] [/notab]
 urlmagic<version>.exe uninstall [/purge] [/quiet] [/norestart | /stopiis]
 urlmagic<version>.exe version
 urlmagic<version>.exe status [/quiet]
+urlmagic<version>.exe validate <file>
 urlmagic<version>.exe site <id> enable|disable [/quiet]
 urlmagic<version>.exe site <id> set key=value [key=value ...] [/quiet]
 ```
@@ -56,7 +57,7 @@ urlmagic<version>.exe site <id> set key=value [key=value ...] [/quiet]
 | 3 | reboot needed: uninstall left files that go at the next reboot |
 | 4 | files were staged: in use, so replaced at the next reboot (`/norestart`). A file that stays locked after a minute without `/norestart` is an error (1), nothing staged |
 | 5 | not Windows NT, or IIS isn't installed |
-| 6 | a site number, setting or value isn't valid (`site`) |
+| 6 | a site number, setting or value isn't valid (`site`), or a rules file has problems (`validate`) |
 
 ### Status and per-site settings
 
@@ -98,6 +99,27 @@ line.
 
 `dir` and `rulesfile` are printed in the console's OEM code page: a character it can't show
 comes out as `?`, and control characters (below a space, and 0x7F to 0x9F) as a space.
+
+### Checking a rules file
+
+`validate <file>` reads a rules file with the filter's own parser, so a typo is found before
+it reaches inetinfo. Each problem is one line, `file(line): message`, then a result line:
+
+```
+rules.txt(3): bad regular expression ...
+result=error code=6 errors=1
+```
+
+`result=ok code=0 rules=N` means the file is fine; exit 6 means problems, 1 that the file can't be
+read, 2 a wrong command line. A file over 1 MB is a problem too (the filter ignores it). So is a file called `httpd.ini`
+(not supported yet, ignored by the filter). It prints
+those lines with or without `/quiet`.
+
+The same check runs on Linux, for validating centrally before upload: `make validate` builds
+`build/urlmagic4-validate` (static, from the same engine sources), and each release carries it as
+`urlmagic4-validate-<version>-linux-x86_64`. `urlmagic4-validate <file>` prints the same lines
+and uses the same exit codes. Releases also carry a bin-only zip (`urlmagic<version>-bin.zip`:
+the installer and the two DLLs) and a `SHA256SUMS` file covering every asset.
 
 The filter is registered enabled (`FilterEnabled`) with a `FilterDescription`.
 

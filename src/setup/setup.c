@@ -28,6 +28,7 @@
 #include "payload.h"
 #include "../common/settings.h"
 #include "setupcore.h"
+#include "../engine/validate.h"
 
 static const GUID CLSID_UmMSAdminBase =
     {0xa9e69610, 0xb80d, 0x11d0, {0xb9, 0xb9, 0x00, 0xa0, 0xc9, 0x22, 0xe7, 0x50}};
@@ -1991,6 +1992,48 @@ static int site_cmd(void)
     return RC_OK;
 }
 
+/* ---------------------------------------------------------------- validate */
+
+static void validate_emit(void *ctx, const char *line)
+{
+    (void)ctx;
+    out(line);
+    out("\r\n");
+}
+
+/* "validate <file>": the engine's parser over the file, as the filter would load it. Prints
+   one "file(line): message" per problem, then a result line, whatever /quiet says. */
+static int validate_cmd(void)
+{
+    HANDLE f = CreateFileW(g_args.file, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    char name[2 * MAX_PATH];
+    char line[80];
+    char *text;
+    DWORD got = 0;
+    int rules = 0;
+    int errors;
+    if (f == INVALID_HANDLE_VALUE) { out("result=error code=1 msg=can't read the file\r\n"); return RC_ERROR; }
+    /* one byte over the limit is enough to know it is too big */
+    text = HeapAlloc(GetProcessHeap(), 0, UM_MAX_RULES_FILE + 2);
+    if (!text || !ReadFile(f, text, UM_MAX_RULES_FILE + 1, &got, NULL)) {
+        out(text ? "result=error code=1 msg=can't read the file\r\n" : "result=error code=1 msg=out of memory\r\n");
+        if (text) HeapFree(GetProcessHeap(), 0, text);
+        CloseHandle(f);
+        return RC_ERROR;
+    }
+    CloseHandle(f);
+    if (!WideCharToMultiByte(CP_OEMCP, 0, g_args.file, -1, name, sizeof name, NULL, NULL))
+        lstrcpyA(name, "rules file");
+    errors = um_validate(name, text, got, validate_emit, NULL, &rules);
+    HeapFree(GetProcessHeap(), 0, text);
+    if (errors < 0) { out("result=error code=1 msg=out of memory\r\n"); return RC_ERROR; }
+    if (errors) wsprintfA(line, "result=error code=6 errors=%d\r\n", errors);
+    else wsprintfA(line, "result=ok code=0 rules=%d\r\n", rules);
+    out(line);
+    return errors ? RC_VALID : RC_OK;
+}
+
 static void usage(void)
 {
     out("urlmagic " UM_VERSION_STR " setup\r\n\r\n  ");
@@ -2001,6 +2044,7 @@ static void usage(void)
     outw(g_self); out(" version            print the version\r\n  ");
     outw(g_self); out(" status             machine state as key=value lines (version, installed, dir,\r\n"
         "                        filter_state, mmc_tab.*, site.<id>.*)\r\n  ");
+    outw(g_self); out(" validate <file>    check a rules file with the filter's own parser\r\n  ");
     outw(g_self); out(" site <id> enable|disable\r\n  ");
     outw(g_self); out(" site <id> set key=value ...   enabled=0|1 format=auto|htaccess|httpd.ini\r\n"
         "                        source=docroot|file rulesfile=<full path> debug=0|1\r\n"
@@ -2023,7 +2067,7 @@ static void usage(void)
         "Exit codes: 0 done, 1 error, 2 wrong command line, 3 reboot needed (uninstall left\r\n"
         "files), 4 files staged, replaced at the next reboot (/norestart only; a file that stays\r\n"
         "locked is an error, 1), 5 not NT with IIS,\r\n"
-        "6 a site number or setting isn't valid.\r\n");
+        "6 a site number or setting, or a rules file, isn't valid.\r\n");
 }
 
 /* ---------------------------------------------------------------- entry point (no CRT) */
@@ -2615,6 +2659,13 @@ void WINAPI start(void)
             if (argv) LocalFree(argv);
             CoUninitialize();
             if (g_quiet) quiet_result(rc);
+            ExitProcess((UINT)rc);
+        }
+        if (!g_perr && g_args.cmd == CMD_VALIDATE) {      /* its own result line, with /quiet or not */
+            g_emit = TRUE;
+            rc = validate_cmd();
+            if (argv) LocalFree(argv);
+            CoUninitialize();
             ExitProcess((UINT)rc);
         }
         if (!g_perr && g_args.cmd == CMD_VERSION) {       /* just the version, nothing else */
