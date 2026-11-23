@@ -2023,7 +2023,8 @@ static int validate_cmd(void)
         return RC_ERROR;
     }
     CloseHandle(f);
-    WideCharToMultiByte(CP_OEMCP, 0, g_args.file, -1, name, sizeof name, NULL, NULL);
+    if (!WideCharToMultiByte(CP_OEMCP, 0, g_args.file, -1, name, sizeof name, NULL, NULL))
+        lstrcpyA(name, "rules file");
     errors = um_validate(name, text, got, validate_emit, NULL, &rules);
     HeapFree(GetProcessHeap(), 0, text);
     if (errors < 0) { out("result=error code=1 msg=out of memory\r\n"); return RC_ERROR; }
