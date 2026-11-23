@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.2.0](https://github.com/muncherelli/urlmagic4/compare/v4.1.1...v4.2.0) (2026-11-23)
+
+
+### Features
+
+* **setup:** unattended install for scripted deployments ([#19](https://github.com/muncherelli/urlmagic4/issues/19)) ([020599c](https://github.com/muncherelli/urlmagic4/commit/020599c4324ca569d0194148733b1c4772576638))
+
 ## [4.1.1](https://github.com/muncherelli/urlmagic4/compare/v4.1.0...v4.1.1) (2026-11-12)
 
 
