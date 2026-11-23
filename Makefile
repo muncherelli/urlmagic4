@@ -76,7 +76,7 @@ $(B)/$(SETUP_EXE): $(SETUP_OBJS)
 	  -Wl,--disable-dynamicbase,--disable-nxcompat -o $@ $(SETUP_OBJS) $(SETUP_LIBS)
 	@if i686-w64-mingw32-objdump -d $@ | grep -qE '\bcmov|\bf(u)?comi'; then \
 	  echo "error: $@ uses P6-only instructions"; rm -f $@; exit 1; fi
-$(B)/setup.o: src/setup/setup.c src/setup/payload.h $(B)/version.h | $(B)
+$(B)/setup.o: src/setup/setup.c src/setup/setupcore.h src/setup/payload.h $(B)/version.h | $(B)
 	$(CC) $(CFLAGS) -I $(B) -c -o $@ $<
 # docs for NT 4.0: .txt names, Windows-1252 and CRLF line endings, so Notepad shows them properly
 DOCS = $(B)/README.txt $(B)/LICENSE.txt $(B)/CHANGELOG.txt
@@ -143,12 +143,16 @@ $(B)/test_fastpath: tests/test_fastpath.c src/engine/rewrite.c src/engine/rewrit
 $(B)/test_scratch: tests/test_scratch.c src/engine/rewrite.c src/engine/rewrite.h $(PCRE2_SRC) | $(B)
 	$(HOSTCC) $(TEST_FLAGS) -fsanitize=address,undefined -o $@ tests/test_scratch.c $(PCRE2_SRC)
 
-test: $(B)/test_engine $(B)/test_engine_exact $(B)/test_engine_nofast $(B)/test_fastpath $(B)/test_scratch
+$(B)/test_setup: tests/test_setup.c src/setup/setupcore.h | $(B)
+	$(HOSTCC) $(TEST_FLAGS) -fsanitize=address,undefined -o $@ tests/test_setup.c
+
+test: $(B)/test_engine $(B)/test_engine_exact $(B)/test_engine_nofast $(B)/test_fastpath $(B)/test_scratch $(B)/test_setup
 	$(B)/test_engine
 	$(B)/test_engine_exact
 	$(B)/test_engine_nofast
 	$(B)/test_fastpath
 	$(B)/test_scratch
+	$(B)/test_setup
 
 install: all
 	rm -f $(DEST)/setup.exe $(DEST)/urlmagic4-v*.exe $(DEST)/urlmagic[0-9]*.exe

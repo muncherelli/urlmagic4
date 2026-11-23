@@ -21,6 +21,42 @@ Changes take effect within seconds. No restart.
 Close Internet Service Manager and run `urlmagic<version>.exe` from
 [releases](https://github.com/muncherelli/urlmagic4/releases). Run it again and press **U** to uninstall.
 
+### Unattended
+
+```
+urlmagic<version>.exe install [folder] [/quiet] [/norestart | /stopiis] [/notab] [/order first|last]
+urlmagic<version>.exe uninstall [/purge] [/quiet] [/norestart | /stopiis]
+urlmagic<version>.exe version
+```
+
+- `/quiet`: no banner, colours or spinner, safe with redirected output. The last (only) line is
+  `result=ok code=0`, `result=error code=N msg=<text>`, or `result=pending code=N msg=<text>` for
+  exit codes 3 and 4 only: a reboot finishes the job.
+- `/norestart`: stop and start no service. A file that is in use (the filter DLL IIS has loaded) is put
+  in place at the next reboot instead, and the exit code is 4. The filter loads at the next W3SVC start.
+- `/stopiis`: stop IISADMIN, which takes W3SVC, MSFTPSVC and SMTPSVC down with it, then start back
+  what was running. Without it only W3SVC is stopped, and it is started again only if it was running.
+- `/notab`: don't register the URL Magic tab (install only).
+- `/order first|last`: where urlmagic4 goes in IIS's `FilterLoadOrder` (default: before `sspifilt`;
+  left where it is if already listed). Other filters are never moved.
+- Installing what is already installed (same version, same files, same filter settings), or removing
+  what is gone, changes nothing and exits 0.
+- `version` prints the version number only; with `/quiet` it prints `result=ok code=0 version=X`.
+- Run from the full-screen or console menu, an install starts W3SVC again only if it was running, and
+  a system check that fails exits 5.
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | done (or nothing to do) |
+| 1 | error |
+| 2 | wrong command line |
+| 3 | reboot needed: uninstall left files that go at the next reboot |
+| 4 | files were staged: in use, so replaced at the next reboot (`/norestart`). A file that stays locked after a minute without `/norestart` is an error (1), nothing staged |
+| 5 | not Windows NT, or IIS isn't installed |
+| 6 | validation failed (reserved) |
+
+The filter is registered enabled (`FilterEnabled`) with a `FilterDescription`.
+
 Sites are off until you turn them on, so URL Magic costs nothing where it isn't used.
 No tab? **Console → Add/Remove Snap-in → Extensions**, tick **URL Magic**, then **Console → Save**.
 
