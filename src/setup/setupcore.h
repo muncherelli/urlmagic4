@@ -99,7 +99,8 @@ static int order_remove(const wchar_t *list, const wchar_t *name, wchar_t *out, 
 
 /* list with name placed by pos, once, and no other item moved:
    ORDER_FIRST: first; ORDER_LAST: last (before sspifilt, if that is the final item);
-   ORDER_KEEP (no /order): right before sspifilt wherever it sits, or last if it isn't listed.
+   ORDER_KEEP (no /order): where name already is (several entries become one, at the first
+   one's position), else right before sspifilt wherever it sits, or last if it isn't listed.
    0 if it doesn't fit in out. */
 static int order_place(const wchar_t *list, const wchar_t *name, int pos, wchar_t *out, int cap)
 {
@@ -108,16 +109,18 @@ static int order_place(const wchar_t *list, const wchar_t *name, int pos, wchar_
     int len;
     int n = 0;                         /* items other than name */
     int ssl = -1;                      /* index of sspifilt among them */
+    int first = -1;                    /* items other than name before its first entry */
     int ins;
     int idx = 0;
     int ok = 1;
     while (order_next(&p, &b, &len)) {
-        if (sc_eqni(b, len, name)) continue;
+        if (sc_eqni(b, len, name)) { if (first < 0) first = n; continue; }
         if (ssl < 0 && sc_eqni(b, len, ORDER_LAST_NAME)) ssl = n;
         n++;
     }
     if (pos == ORDER_FIRST) ins = 0;
     else if (pos == ORDER_LAST) ins = (ssl >= 0 && ssl == n - 1) ? n - 1 : n;
+    else if (first >= 0) ins = first;
     else ins = ssl >= 0 ? ssl : n;
     out[0] = 0;
     p = list;
@@ -131,7 +134,7 @@ static int order_place(const wchar_t *list, const wchar_t *name, int pos, wchar_
     return ok;
 }
 
-/* is name in list where pos says (ORDER_KEEP: anywhere)? */
+/* is name once in list where pos says (ORDER_KEEP: anywhere)? */
 static int order_placed(const wchar_t *list, const wchar_t *name, int pos)
 {
     const wchar_t *p = list;
@@ -142,16 +145,24 @@ static int order_placed(const wchar_t *list, const wchar_t *name, int pos)
     int last_ok = 1;                   /* name is last, or only a final sspifilt follows */
     int after = 0;                     /* items after name */
     int after_ssl = 0;                 /* ... and the last of them is sspifilt */
+    int copies = 0;
     while (order_next(&p, &b, &len)) {
-        if (sc_eqni(b, len, name)) { if (at < 0) at = idx; after = 0; after_ssl = 0; }
+        if (sc_eqni(b, len, name)) { copies++; if (at < 0) at = idx; after = 0; after_ssl = 0; }
         else if (at >= 0) { after++; after_ssl = sc_eqni(b, len, ORDER_LAST_NAME); }
         idx++;
     }
-    if (at < 0) return 0;
+    if (at < 0 || copies > 1) return 0;   /* more than one entry: not current, to be repaired */
     last_ok = after == 0 || (after == 1 && after_ssl);
     if (pos == ORDER_FIRST) return at == 0;
     if (pos == ORDER_LAST) return last_ok;
     return 1;
+}
+
+/* does exit code rc mean "a reboot finishes the job" (3 reboot needed, 4 files staged)? Only
+   those; every abort is an error. */
+static int um_pending(int rc)
+{
+    return rc == 3 || rc == 4;
 }
 
 /* does the command line (argv[0] is the program) ask for /quiet? Looked at before parsing, so

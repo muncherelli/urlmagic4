@@ -78,6 +78,14 @@ static void test_order(void)
     ok(order_placed(L"sspifilt,urlmagic4", L"urlmagic4", ORDER_KEEP), "after sspifilt: current without /order");
     ok(order_placed(L"sspifilt,urlmagic4", L"urlmagic4", ORDER_LAST), "after sspifilt: last");
     ok(!order_placed(L"urlmagic4,a,sspifilt", L"urlmagic4", ORDER_LAST), "not last, sspifilt after");
+    /* more than one entry is not current, whatever /order says */
+    ok(!order_placed(L"urlmagic4,a,urlmagic4", L"urlmagic4", ORDER_KEEP), "twice: not current");
+    ok(!order_placed(L"urlmagic4,urlmagic4", L"urlmagic4", ORDER_FIRST), "twice, first: not current");
+    ok(!order_placed(L"a,URLMAGIC4,urlmagic4", L"urlmagic4", ORDER_LAST), "twice, last: not current");
+    place(L"a,urlmagic4,b,urlmagic4,sspifilt", ORDER_KEEP, L"a,urlmagic4,b,sspifilt", "twice: one, at the first's place");
+    place(L"urlmagic4,a,URLMagic4", ORDER_KEEP, L"urlmagic4,a", "twice: one, first place, others unmoved");
+    ok(um_pending(3) && um_pending(4), "reboot needed and staged are pending");
+    ok(!um_pending(0) && !um_pending(1) && !um_pending(2) && !um_pending(5), "an abort, in use or not, is an error");
     ok(!order_placed(L"a,urlmagic4,b,sspifilt", L"urlmagic4", ORDER_LAST), "not last, two after");
 }
 

@@ -31,7 +31,7 @@ urlmagic<version>.exe version
 
 - `/quiet`: no banner, colours or spinner, safe with redirected output. The last (only) line is
   `result=ok code=0`, `result=error code=N msg=<text>`, or `result=pending code=N msg=<text>` for
-  exit codes 3 and 4 (a reboot finishes the job).
+  exit codes 3 and 4 only: a reboot finishes the job.
 - `/norestart`: stop and start no service. A file that is in use (the filter DLL IIS has loaded) is put
   in place at the next reboot instead, and the exit code is 4. The filter loads at the next W3SVC start.
 - `/stopiis`: stop IISADMIN, which takes W3SVC, MSFTPSVC and SMTPSVC down with it, then start back
@@ -51,7 +51,7 @@ urlmagic<version>.exe version
 | 1 | error |
 | 2 | wrong command line |
 | 3 | reboot needed: uninstall left files that go at the next reboot |
-| 4 | a file was in use; it is replaced at the next reboot (`/norestart`), or it stayed locked |
+| 4 | files were staged: in use, so replaced at the next reboot (`/norestart`). A file that stays locked after a minute without `/norestart` is an error (1), nothing staged |
 | 5 | not Windows NT, or IIS isn't installed |
 | 6 | validation failed (reserved) |
 

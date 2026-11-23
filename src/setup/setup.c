@@ -872,8 +872,7 @@ static BOOL filter_register(WCHAR *dll)
         hr = mb->lpVtbl->SetData(mb, h, FILTER_NAME, &r);
     }
     /* in the list once; where /order says (default: before sspifilt, or where it already is) */
-    if (SUCCEEDED(hr) && (!order_has(order, FILTER_NAME) ||
-                          (g_args.order != ORDER_KEEP && !order_placed(order, FILTER_NAME, g_args.order)))) {
+    if (SUCCEEDED(hr) && !order_placed(order, FILTER_NAME, g_args.order)) {
         if (!order_place(order, FILTER_NAME, g_args.order,
                          neworder, ORDER_MAX + 64)) {
             hr = HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
@@ -1050,13 +1049,17 @@ static void default_dir(WCHAR *dir)
     wsprintfW(dir, L"%s\\URLMagic4", drive);
 }
 
-static void join(WCHAR *outp, const WCHAR *dir, const WCHAR *file)
+/* dir\file in outp; if it doesn't fit, outp is left empty and the result is FALSE */
+static BOOL join(WCHAR *outp, const WCHAR *dir, const WCHAR *file)
 {
-    int n;
-    lstrcpynW(outp, dir, MAX_PATH);
-    n = lstrlenW(outp);
-    if (n && outp[n - 1] != L'\\' && n < MAX_PATH - 1) { outp[n++] = L'\\'; outp[n] = 0; }
-    lstrcpynW(outp + n, file, MAX_PATH - n);
+    int n = lstrlenW(dir);
+    int need = n + (n && dir[n - 1] != L'\\' ? 1 : 0) + lstrlenW(file);
+    outp[0] = 0;
+    if (need >= MAX_PATH) return FALSE;
+    lstrcpyW(outp, dir);
+    if (n && dir[n - 1] != L'\\') outp[n++] = L'\\';
+    lstrcpyW(outp + n, file);
+    return TRUE;
 }
 
 /* The install folder recorded at install time (for uninstall). */
@@ -1089,7 +1092,7 @@ static void arp_register(const WCHAR *dir)
     DWORD one = 1;
     WCHAR exe[MAX_PATH];
     WCHAR cmd[MAX_PATH + 20];
-    join(exe, dir, g_self);
+    if (!join(exe, dir, g_self)) return;
     wsprintfW(cmd, L"\"%s\" /remove", exe);
     if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, ARP_KEY, 0, NULL, 0, KEY_WRITE, NULL, &k, &disp) != ERROR_SUCCESS) return;
     set_sz(k, L"DisplayName", L"URL Magic " UM_VERSION_WSTR L" (urlmagic4)");
@@ -1432,8 +1435,7 @@ static void lock_files(const WCHAR *dir)
 {
     static const WCHAR *LOGS[] = { L"urlmagic4.log", L"urlmagic4.log.old", NULL };
     WCHAR f[MAX_PATH];
-    join(f, dir, g_self);
-    lock_path(f, LOCK_FILE);
+    if (join(f, dir, g_self)) lock_path(f, LOCK_FILE);
     for (int i = 0; FILES[i]; i++) { join(f, dir, FILES[i]); lock_path(f, LOCK_FILE); }
     for (int i = 0; LOGS[i]; i++) { join(f, dir, LOGS[i]); lock_path(f, LOCK_FILE); }
 }
@@ -1458,6 +1460,10 @@ static int install_run(const WCHAR *dir)
 
     if (lstrlenW(dir) > MAX_PATH - 64) { fail("the install folder's path is too long", 0); return RC_ERROR; }
     dir_of_exe(src);
+    if (!join(from, src, g_self) || !join(to, dir, g_self)) {
+        fail("setup's file name is too long for the install folder", 0);
+        return RC_ERROR;
+    }
     {
         char title[MAX_PATH + 40];
         char d[MAX_PATH];
@@ -1495,7 +1501,7 @@ static int install_run(const WCHAR *dir)
             msg(path, C_RED);
             if (in_use(e)) note("It's still in use after a minute: close Internet Service Manager and run setup again.");
             svc_back(running);
-            if (in_use(e)) { keep_msg("a file is in use"); return RC_INUSE; }
+            if (in_use(e)) keep_msg("a file is in use");     /* nothing staged: an error, not pending */
             return RC_ERROR;
         }
     }
@@ -1612,7 +1618,7 @@ static BOOL delete_setup_copy(const WCHAR *dir)
         RegCloseKey(k);
     }
     if (!setup[0]) return FALSE;
-    join(f, dir, setup);
+    if (!join(f, dir, setup)) return FALSE;
     GetModuleFileNameW(NULL, here, MAX_PATH);
     if (lstrcmpiW(f, here) == 0) {
         MoveFileExW(f, NULL, MOVEFILE_DELAY_UNTIL_REBOOT);
@@ -1840,7 +1846,8 @@ static void usage(void)
         "Only W3SVC is stopped by default, and started again only if it was running.\r\n"
         "\r\n"
         "Exit codes: 0 done, 1 error, 2 wrong command line, 3 reboot needed (uninstall left\r\n"
-        "files), 4 a file was in use (replaced at the next reboot), 5 not NT with IIS,\r\n"
+        "files), 4 files staged, replaced at the next reboot (/norestart only; a file that stays\r\n"
+        "locked is an error, 1), 5 not NT with IIS,\r\n"
         "6 validation failed (reserved).\r\n");
 }
 
@@ -2397,7 +2404,7 @@ static void quiet_result(int rc)
     g_emit = TRUE;
     if (rc == 0) out("result=ok code=0\r\n");
     else {
-        wsprintfA(line, "result=%s code=%d msg=%s\r\n", (rc == RC_REBOOT || rc == RC_INUSE) ? "pending" : "error",
+        wsprintfA(line, "result=%s code=%d msg=%s\r\n", um_pending(rc) ? "pending" : "error",
                   rc, msg[0] ? msg : "failed");
         out(line);
     }
