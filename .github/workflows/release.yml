@@ -30,6 +30,7 @@ jobs:
         if: steps.rp.outputs.release_created
         run: |
           make dist
-          gh release upload "${{ steps.rp.outputs.tag_name }}" build/urlmagic[0-9]*.exe build/urlmagic[0-9]*.zip --clobber
+          (cd build && sha256sum urlmagic[0-9]*.exe urlmagic[0-9]*.zip > SHA256SUMS)
+          gh release upload "${{ steps.rp.outputs.tag_name }}" build/urlmagic[0-9]*.exe build/urlmagic[0-9]*.zip build/SHA256SUMS --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

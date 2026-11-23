@@ -8,7 +8,7 @@
   python3 tools/compat.py show             print the recorded results
 
 HOST is the IIS server's address; requests use the Host header of --site (default
-dev.muncherelli.com), whose web root must contain um-echo.cfm (see tests/compat/cases.py).
+dev.example.com), whose web root must contain um-echo.cfm (see tests/compat/cases.py).
 """
 import argparse
 import http.client
@@ -57,7 +57,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["ini", "capture", "show"])
     ap.add_argument("host", nargs="?")
-    ap.add_argument("--site", default="dev.muncherelli.com")
+    ap.add_argument("--site", default="dev.example.com")
     a = ap.parse_args()
 
     if a.cmd == "ini":
